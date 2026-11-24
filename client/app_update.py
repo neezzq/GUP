@@ -9,6 +9,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+from xml.etree import ElementTree
 
 import httpx
 
@@ -16,8 +17,8 @@ from .api import VERSION
 
 
 REPOSITORY = "neezzq/GUP"
-API_URL = f"https://api.github.com/repos/{REPOSITORY}/releases?per_page=30"
-RELEASE_URL = f"https://github.com/{REPOSITORY}/releases/download"
+RELEASE_URL = f"https://github.com/{REPOSITORY}/releases"
+ATOM = "{http://www.w3.org/2005/Atom}"
 ASSET_HOSTS = {"release-assets.githubusercontent.com", "objects.githubusercontent.com"}
 TAG = re.compile(r"v(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})-build\.([1-9][0-9]{0,9})")
 HASH_LINE = re.compile(rb"([0-9a-fA-F]{64})[ \t]+\*?GameUpdater\.exe\r?\n?")
@@ -60,28 +61,29 @@ def current_build():
 
 
 def latest_build(client):
-    response = client.get(API_URL, headers={"Accept": "application/vnd.github+json"})
-    response.raise_for_status()
-    releases = response.json()
-    if not isinstance(releases, list):
-        raise ValueError("Invalid release listing")
+    listing = bytearray()
+    with client.stream("GET", RELEASE_URL + ".atom", follow_redirects=False) as response:
+        response.raise_for_status()
+        for chunk in response.iter_bytes(chunk_size=65536):
+            listing.extend(chunk)
+            if len(listing) > 1024 * 1024:
+                raise ValueError("Release listing exceeds size limit")
+    feed = ElementTree.fromstring(listing)
+    prefix = RELEASE_URL + "/tag/"
     builds = []
-    for release in releases:
-        if not isinstance(release, dict) or release.get("draft") is not False:
-            continue
-        build = Build.from_tag(release.get("tag_name"))
-        assets = release.get("assets")
-        names = {item.get("name") for item in assets if isinstance(item, dict)
-                 and isinstance(item.get("name"), str)} if isinstance(assets, list) else set()
-        if build and {"GameUpdater.exe", "GameUpdater.exe.sha256"} <= names:
-            builds.append(build)
+    for entry in feed.findall(f"{ATOM}entry"):
+        for link in entry.findall(f"{ATOM}link"):
+            href = link.get("href", "")
+            if link.get("rel") == "alternate" and href.startswith(prefix):
+                if build := Build.from_tag(href[len(prefix):]):
+                    builds.append(build)
     if not builds:
-        raise ValueError("No complete Windows release found")
+        raise ValueError("No Windows release found")
     return max(builds)
 
 
 def asset_chunks(client, build, name, limit):
-    request = client.build_request("GET", f"{RELEASE_URL}/{build.tag}/{name}")
+    request = client.build_request("GET", f"{RELEASE_URL}/download/{build.tag}/{name}")
     for _ in range(4):
         response = client.send(request, stream=True, follow_redirects=False)
         try:

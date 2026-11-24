@@ -8,21 +8,20 @@ import time
 import httpx
 import pytest
 
-from client.app_update import Build, ERROR_FILE, download_build, latest_build, start_replacement
-
-
-def release(tag, *, draft=False, complete=True):
-    assets = [{"name": "GameUpdater.exe"}, {"name": "GameUpdater.exe.sha256"}]
-    return {"tag_name": tag, "draft": draft, "assets": assets if complete else assets[:1]}
+from client.app_update import Build, ERROR_FILE, RELEASE_URL, download_build, latest_build, start_replacement
 
 
 def test_release_selection_uses_version_then_build():
-    data = [
-        release("v0.1.2-build.70"), release("v0.2.0-build.1"), release("v0.2.0-build.2"),
-        release("v1.0.0-build.80", draft=True), release("v2.0.0-build.92", complete=False),
-        release("v3.0.0"), release("v4.0.0-build.2/../../other"),
+    urls = [
+        f"{RELEASE_URL}/tag/{tag}" for tag in (
+            "v0.1.2-build.70", "v0.2.0-build.1", "v0.2.0-build.2",
+            "v3.0.0", "v4.0.0-build.2/../../other",
+        )
     ]
-    with httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, json=data))) as client:
+    urls.append("https://github.com/other/repo/releases/tag/v5.0.0-build.12")
+    entries = "".join(f'<entry><link rel="alternate" href="{url}"/></entry>' for url in urls)
+    feed = f'<feed xmlns="http://www.w3.org/2005/Atom">{entries}</feed>'
+    with httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, text=feed))) as client:
         assert latest_build(client) == Build((0, 2, 0), 2)
     assert Build.from_tag("v0.2.0-build.2").label == "0.2.0 · build 2"
 
