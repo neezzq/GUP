@@ -245,3 +245,22 @@ def test_launcher_leaves_external_sign_in_to_operator(monkeypatch):
     monkeypatch.setattr(launcher.ui, "login_form", lambda windows: None)
     monkeypatch.setattr(launcher.ui, "external_sign_in", lambda windows: True)
     assert launcher.check_auth() == "external_login"
+
+
+def test_launcher_scan_finds_registry_icon_and_running_executable(tmp_path, monkeypatch):
+    from client.automation import InstalledProgram
+    from client.launchers import scan_launchers
+
+    steam = tmp_path / "steam.exe"
+    steam.touch()
+    epic = tmp_path / "EpicGamesLauncher.exe"
+    epic.touch()
+    monkeypatch.setattr("client.automation.installed_programs", lambda: (
+        InstalledProgram("Epic Games Launcher", "Epic Games", None, "", epic),
+    ))
+    monkeypatch.setattr("client.automation.running_programs", lambda: ((None, steam),))
+    monkeypatch.setattr("client.launchers.base.verified_binary", lambda path, publishers: path in (steam, epic))
+    result = list(scan_launchers({}, {"steam": Steam, "epic": Epic}))
+    assert [(key, launcher.exe, status) for key, launcher, status in result] == [
+        ("steam", steam, "installed"), ("epic", epic, "installed"),
+    ]

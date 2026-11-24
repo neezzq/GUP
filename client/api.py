@@ -5,7 +5,7 @@ import time
 import httpx
 
 
-VERSION = "0.1.1"
+VERSION = "0.1.2"
 PREFIX = "/api/v1/"
 TOKEN = re.compile(r"[A-Za-z0-9_-]{43}")
 

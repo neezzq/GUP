@@ -58,6 +58,15 @@ def main():
             window.withdraw()
             window.update_idletasks()
             assert len(window.rows) == 7
+            assert window.version in window.title()
+            assert str(window.update_button.cget("state")) == (
+                "normal" if getattr(sys, "frozen", False) else "disabled"
+            )
+            import os
+
+            run_number = os.environ.get("GITHUB_RUN_NUMBER")
+            if run_number and getattr(sys, "frozen", False):
+                assert window.version.endswith(f"build {run_number}")
             window.close_logging()
             window.destroy()
         return

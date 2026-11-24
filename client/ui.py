@@ -4,6 +4,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 import os
 import platform
+import sys
 import threading
 import tkinter
 from tkinter import filedialog
@@ -11,7 +12,8 @@ from tkinter import filedialog
 import customtkinter as tk
 
 from .api import API, normalize_server
-from .launchers import LAUNCHERS
+from .app_update import ERROR_FILE, current_build, prepare_update
+from .launchers import LAUNCHERS, scan_launchers
 from .security import credential_store, launcher_icon, write_settings
 from .updater import Updater
 
@@ -41,6 +43,8 @@ LABELS = {
     "busy": ("Аккаунт занят", "Account busy"),
     "error": ("Ошибка", "Error"),
     "skipped": ("Пропущено", "Skipped"),
+    "installed": ("Установлен", "Installed"),
+    "scanning": ("Поиск…", "Detecting…"),
     "not_installed": ("Не установлен", "Not installed"),
     "login_required": ("Требуется вход", "Sign-in required"),
     "online": ("Сервер подключён", "Server connected"),
@@ -89,6 +93,9 @@ class Window(tk.CTk):
         self.panel = None
         self.closing = False
         self.rows = {}
+        self.inventory = {}
+        self.detection_labels = {}
+        self.scanning = self.update_active = self.game_busy = self.auto_after_scan = False
         self.enrolling = False
         self.logger = logging.getLogger("gup.local")
         self.logger.setLevel(logging.INFO)
@@ -96,7 +103,8 @@ class Window(tk.CTk):
         file = RotatingFileHandler(directory / "events.log", maxBytes=512 * 1024, backupCount=2, encoding="utf-8")
         file.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
         self.logger.addHandler(file)
-        self.title("Game Updater")
+        self.version = current_build().label
+        self.title(f"Game Updater {self.version}")
         self.geometry("700x620")
         self.minsize(660, 580)
         self.protocol("WM_DELETE_WINDOW", self.shutdown)
@@ -127,14 +135,21 @@ class Window(tk.CTk):
         title.pack(side="left")
         tk.CTkLabel(title, text="Game Updater", text_color=TEXT, anchor="w",
                     font=("Segoe UI", 25, "bold")).pack(anchor="w")
+        tk.CTkLabel(title, text=self.t(f"Версия {self.version}", f"Version {self.version}"),
+                    text_color=SECONDARY, anchor="w").pack(anchor="w")
         self.network = tk.CTkLabel(title, text=self.settings.get("name", platform.node()),
                                    text_color=SECONDARY, anchor="w")
         self.network.pack(anchor="w")
         self.settings_button = self.button(header, self.t("Настройки", "Settings"), self.preferences)
         self.settings_button.pack(side="right")
+        self.update_button = self.button(
+            header, self.t("Обновить приложение", "Update application"), self.update_click, width=161,
+        )
+        self.update_button.pack(side="right", padx=(0, 7))
         self.table = tk.CTkFrame(frame, fg_color=SURFACE, border_color=BORDER, border_width=1)
         self.table.pack(fill="x")
         self.rows.clear()
+        self.detection_labels.clear()
         for key in self.settings.get("order", list(LAUNCHERS)):
             row = tk.CTkFrame(self.table, height=34, fg_color=SURFACE)
             row.pack(fill="x", padx=10, pady=1)
@@ -144,7 +159,11 @@ class Window(tk.CTk):
             tk.CTkLabel(row, text=LAUNCHERS[key], font=("Segoe UI", 14, "bold")).pack(side="left")
             status = tk.CTkLabel(row, text=self.label("waiting"), text_color=SECONDARY)
             status.pack(side="right", padx=(8, 4))
+            badge = tk.CTkLabel(row, text="", text_color=SECONDARY)
+            badge.pack(side="right", padx=(8, 4))
+            self.detection_labels[key] = badge
             self.rows[key] = (icon, status)
+            self.render_detection(key)
         self.current = tk.CTkLabel(frame, text=self.t("Готов к проверке", "Ready to check"), anchor="w")
         self.current.pack(fill="x", pady=(8, 2))
         self.detail = tk.CTkProgressBar(frame, height=5, fg_color=BORDER, progress_color=ACCENT)
@@ -168,7 +187,7 @@ class Window(tk.CTk):
         self.stop_button = self.button(actions, self.t("Остановить", "Stop"), self.stop, width=88)
         self.stop_button.pack(side="left", padx=(0, 6))
         self.button(actions, self.t("Журнал", "Log"), self.toggle_log, width=70).pack(side="left")
-        self.render_busy(False)
+        self.render_busy(self.game_busy)
 
     def toggle_log(self):
         self.log_open = not self.log_open
@@ -188,27 +207,106 @@ class Window(tk.CTk):
         self.log_box.configure(state="disabled")
 
     def render_busy(self, busy):
-        self.run_button.configure(state="disabled" if busy else "normal")
-        self.settings_button.configure(state="disabled" if busy else "normal")
+        self.game_busy = busy
+        blocked = busy or self.scanning or self.update_active
+        self.run_button.configure(state="disabled" if blocked else "normal")
+        self.settings_button.configure(state="disabled" if blocked else "normal")
+        self.update_button.configure(
+            state="normal" if not blocked and getattr(sys, "frozen", False) else "disabled",
+        )
         self.pause_button.configure(state="normal" if busy else "disabled", text=self.t("Приостановить", "Pause"))
         self.stop_button.configure(state="normal" if busy else "disabled")
+
+    def render_detection(self, key):
+        path, status = self.inventory.get(key, (None, "scanning"))
+        text = self.label(status)
+        if status in {"signature", "detect_failed"}:
+            text = self.t("Требует проверки", "Check required")
+        self.detection_labels[key].configure(text=text, text_color=GREEN if path else SECONDARY)
+
+    def scan(self):
+        self.scanning = True
+        self.inventory.clear()
+        for key in self.detection_labels:
+            self.render_detection(key)
+        self.render_busy(self.game_busy)
+        paths = dict(self.settings.get("paths", {}))
+
+        def work():
+            try:
+                for key, launcher, status in scan_launchers(paths):
+                    path = launcher.exe if launcher else None
+                    self.events.put(("detected_launcher", (key, path, status)))
+                    if path and (icon := launcher_icon(path)):
+                        self.events.put(("icon", (key, icon)))
+            finally:
+                self.events.put(("scan_done", None))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def update_click(self):
+        if self.game_busy or self.scanning or self.update_active or self.enrolling or self.panel:
+            return
+        self.update_active = True
+        self.render_busy(False)
+        self.current.configure(text=self.t("Проверяю версию на GitHub…", "Checking GitHub for updates…"), text_color=TEXT)
+
+        def work():
+            try:
+                build = prepare_update(
+                    self.directory, lambda release: self.events.put(("app_download", release.label)),
+                )
+                self.events.put(("app_update", "restart" if build else "current"))
+            except Exception:
+                self.events.put(("app_update", "failed"))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def update_result(self, result):
+        if result == "restart":
+            self.close_logging()
+            self.destroy()
+            return
+        self.update_active = False
+        self.render_busy(False)
+        if result == "current":
+            message = self.t("Установлена последняя версия приложения", "The application is up to date")
+        else:
+            message = self.t("Не удалось обновить приложение. Проверьте доступ к GitHub и запись в папку EXE.",
+                             "Update failed. Check GitHub access and permissions to write to the EXE folder.")
+        self.current.configure(text=message, text_color=GREEN if result == "current" else RED)
+
 
     def token(self):
         identifier = self.settings.get("device_id")
         return self.vault.get_password(SERVICE, identifier) if identifier else None
 
     def on_open(self):
+        self.scan()
+        marker = self.directory / ERROR_FILE
+        replacement_failed = False
+        try:
+            marker.unlink()
+        except OSError:
+            pass
+        else:
+            replacement_failed = True
+            self.current.configure(
+                text=self.t("Не удалось заменить EXE. Запущена предыдущая версия.",
+                            "Could not replace the EXE. The previous version is running."),
+                text_color=RED,
+            )
         try:
             connected = bool(self.settings.get("server") and self.token())
         except Exception:
             connected = False
         if not connected:
             self.enrollment()
-        elif self.settings.get("auto_start", True):
-            self.start()
+        elif self.settings.get("auto_start", True) and not replacement_failed:
+            self.auto_after_scan = True
 
     def start(self):
-        if self.panel or (self.worker and self.worker.is_alive()):
+        if self.update_active or self.panel or (self.worker and self.worker.is_alive()):
             return
         try:
             token = self.token()
@@ -217,6 +315,9 @@ class Window(tk.CTk):
             return
         if not token:
             self.enrollment()
+            return
+        if self.scanning:
+            self.auto_after_scan = True
             return
         self.render_busy(True)
         for key, (_, status) in self.rows.items():
@@ -277,7 +378,7 @@ class Window(tk.CTk):
             handler.close()
 
     def shutdown(self):
-        if self.enrolling:
+        if self.enrolling or self.update_active:
             return
         if self.worker and self.worker.is_alive():
             self.closing = True
@@ -298,6 +399,29 @@ class Window(tk.CTk):
                     self.render_busy(False)
                 elif category == "registered":
                     self.enrolled(payload)
+                elif category == "detected_launcher":
+                    key, path, status = payload
+                    self.inventory[key] = (path, status)
+                    self.render_detection(key)
+                elif category == "scan_done":
+                    self.scanning = False
+                    for key in self.detection_labels:
+                        if key not in self.inventory:
+                            self.inventory[key] = (None, "detect_failed")
+                            self.render_detection(key)
+                    self.render_busy(self.game_busy)
+                    if self.auto_after_scan:
+                        self.auto_after_scan = False
+                        self.start()
+                elif category == "app_download":
+                    self.current.configure(
+                        text=self.t(f"Скачиваю версию {payload}…", f"Downloading version {payload}…"),
+                        text_color=TEXT,
+                    )
+                elif category == "app_update":
+                    self.update_result(payload)
+                    if payload == "restart":
+                        return
                 elif category == "icon" and payload[0] in self.rows:
                     import io
                     from PIL import Image
@@ -526,7 +650,9 @@ class Window(tk.CTk):
             row = tk.CTkFrame(items, fg_color=SURFACE)
             value = tkinter.BooleanVar(value=key in enabled)
             tk.CTkCheckBox(row, variable=value, text=LAUNCHERS[key], width=125).pack(side="left", padx=(0, 4))
-            entry = tk.CTkEntry(row, placeholder_text=self.t("Путь к клиенту", "Launcher path"))
+            detected_path, _ = self.inventory.get(key, (None, "scanning"))
+            placeholder = str(detected_path) if detected_path else self.t("Путь к клиенту", "Launcher path")
+            entry = tk.CTkEntry(row, placeholder_text=placeholder)
             if key in paths:
                 entry.insert(0, paths[key])
             entry.pack(side="left", fill="x", expand=True)
@@ -554,6 +680,7 @@ class Window(tk.CTk):
             dialog.destroy()
             self.panel = None
             self.draw()
+            self.scan()
 
         self.button(footer, self.t("Открыть папку логов", "Open logs folder"),
                     lambda: os.startfile(self.directory), width=145).pack(side="left")

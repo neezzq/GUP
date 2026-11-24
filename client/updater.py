@@ -4,8 +4,7 @@ import time
 from threading import Event
 
 from .api import ServerRejected, ServerUnavailable
-from .automation import installed_programs
-from .launchers import LAUNCHERS, adapters
+from .launchers import LAUNCHERS, adapters, scan_launchers
 from .launchers.base import Result, UnsafeDesktop
 
 
@@ -227,19 +226,17 @@ class Updater:
             self.publish("finished", result=Result("finished"))
             return
         paths = self.settings.get("paths", {})
-        inventory = tuple(installed_programs())
         launchers, initial = {}, {}
-        for key in self.launcher_types:
+        for key, launcher, detection in scan_launchers(paths, self.launcher_types):
             try:
                 self.delay(0)
-                launcher = self.launcher_types[key](paths.get(key, ""), inventory)
-                if launcher.detect():
+                if launcher is not None:
                     launcher.games = list({game.id: game for game in launcher.discover_games()}.values())
                     launchers[key] = launcher
                     if key in selected and self.icon_callback:
                         self.icon_callback(key, launcher.exe)
                 else:
-                    initial[key] = Result("error", "signature") if launcher.locked else Result("skipped", "not_installed")
+                    initial[key] = Result("skipped" if detection == "not_installed" else "error", detection)
             except Cancelled:
                 self.publish("finished", result=Result("skipped", "stopped"))
                 return

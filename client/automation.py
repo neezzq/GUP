@@ -15,6 +15,7 @@ class InstalledProgram:
     publisher: str
     location: Path | None
     uninstall: str
+    icon: Path | None = None
 
 
 def registry_values(hive, key, names):
@@ -41,7 +42,7 @@ def installed_programs() -> Iterator[InstalledProgram]:
     import winreg
 
     key = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"
-    fields = ("DisplayName", "Publisher", "InstallLocation", "UninstallString")
+    fields = ("DisplayName", "Publisher", "InstallLocation", "UninstallString", "DisplayIcon")
     seen = set()
     for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
         for view in (winreg.KEY_WOW64_64KEY, winreg.KEY_WOW64_32KEY):
@@ -57,10 +58,13 @@ def installed_programs() -> Iterator[InstalledProgram]:
                         continue
                     location = str(entry.get("InstallLocation", "")).strip().strip('"')
                     path = Path(os.path.expandvars(location)) if location else None
+                    display_icon = str(entry.get("DisplayIcon", "")).strip()
+                    display_icon = re.sub(r",\s*-?\d+$", "", display_icon).strip().strip('"')
+                    icon = Path(os.path.expandvars(display_icon)) if display_icon else None
                     program = InstalledProgram(
                         label, str(entry.get("Publisher", "")),
                         path if path and path.is_absolute() else None,
-                        str(entry.get("UninstallString", "")),
+                        str(entry.get("UninstallString", "")), icon if icon and icon.is_absolute() else None,
                     )
                     if program not in seen:
                         seen.add(program)

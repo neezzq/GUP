@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from itertools import chain
 import json
 import os
 from pathlib import Path
@@ -87,6 +88,7 @@ class Launcher:
     def __init__(self, override="", programs=None):
         self.override = override
         self.programs = programs
+        self.running_exes = ()
         self.exe = None
         self.spawned = None
         self.games = []
@@ -99,9 +101,12 @@ class Launcher:
 
     def discover_paths(self):
         for program in self.inventory():
-            if program.location and normalized(program.name) in self.display_names:
-                for relative in self.suffixes:
-                    yield program.location / relative
+            if normalized(program.name) in self.display_names:
+                if program.icon:
+                    yield program.icon
+                if program.location:
+                    for relative in self.suffixes:
+                        yield program.location / relative
         for env, relative in self.paths:
             if path := local_directory(env, relative):
                 yield path
@@ -114,11 +119,13 @@ class Launcher:
             paths = self.discover_paths()
         valid_names = {Path(suffix).name.casefold() for suffix in self.suffixes}
         installed = False
-        for path in paths:
+        running = () if self.override else self.running_exes
+        candidates = chain(((path, True) for path in paths), ((path, False) for path in running))
+        for path, expected_installation in candidates:
             try:
                 if path.name.casefold() not in valid_names or not path.is_file():
                     continue
-                installed = True
+                installed = installed or expected_installation
                 if not verified_binary(path, self.publishers):
                     continue
                 resolved = path.resolve(strict=True)
