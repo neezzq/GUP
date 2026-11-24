@@ -68,11 +68,34 @@ override и запускайте его с `--no-build`.
 
 ### Свой аккаунт без передачи пароля Game Updater
 
-В панели **Аккаунты** кнопка **Войти через …** открывает официальный сайт сервиса в
-отдельной вкладке. Для обновления игр войди в официальный лаунчер Windows на каждом
-компьютере. Если нужно указать способ входа в Game Updater, раскрой **Настроить вход
-для обновлений на ПК** и сохрани имя или ник. Для Epic Games можно отметить **Через Steam**,
-если этот способ предлагает сам Epic. Активную сессию сохраняет лаунчер на компьютере.
+В панели **Аккаунты** кнопка **Войти через Steam** открывает Steam OpenID.
+После подтверждения панель сохраняет проверенный SteamID. Steam OpenID работает
+с настроенным доменом панели и не требует API-ключа. Игровая сессия создаётся
+в установленном Windows-лаунчере на каждом компьютере.
+
+Для подтверждения Epic Games, Riot и Battle.net нужны зарегистрированные приложения
+с доступом к соответствующему OAuth API. Скопируй `.env.oauth.example` в
+`.env.oauth`, выставь права `0600` и укажи выданные Client ID и Client Secret.
+Зарегистрируй точный HTTPS-адрес возврата для каждого используемого сервиса:
+
+- Epic Games — `https://<домен>/admin/accounts/epic/callback`
+- Riot — `https://<домен>/admin/accounts/riot/callback`
+- Battle.net — `https://<домен>/admin/accounts/battlenet/callback`
+
+Если для VK Play используется VK ID, зарегистрируй приложение VK ID с адресом
+`https://<домен>/admin/accounts/vkplay/callback` и укажи его ID в
+`GUP_VKPLAY_VK_ID_CLIENT_ID`. Эта привязка подтверждает аккаунт VK ID.
+
+Пересоздай backend командой `docker compose up -d --build`. Сервер должен иметь
+доступ к официальным API по HTTPS. Панель хранит полученный подтверждённый ID.
+Для EA и Lesta доступ к аккаунту выполняется в их официальных клиентах.
+Параметры входа для обновлений можно указать в **Настроить вход для обновлений на ПК**.
+
+[Steam OpenID](https://partner.steamgames.com/doc/features/auth#website) ·
+[Epic Account Services](https://dev.epicgames.com/docs/web-api-ref/authentication) ·
+[Riot Developer Portal](https://developer.riotgames.com/) ·
+[Battle.net](https://develop.battle.net/documentation/guides/using-oauth) ·
+[VK ID](https://github.com/VKCOM/vkid-web-sdk)
 
 Если на сервере уже есть пароль этого лаунчера, переключение предложит явно удалить
 его. После переключения сервер перестанет выдавать данные для входа этому лаунчеру.

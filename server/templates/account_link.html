@@ -1,0 +1,13 @@
+{% extends 'layout.html' %}
+{% block content %}
+<section class="login card">
+  {% if subject %}
+  <h1>Аккаунт {{ name }} привязан</h1>
+  <p class="ok">Подтверждённый ID · {{ subject }}</p>
+  {% else %}
+  <h1>Вход через {{ name }} не подтверждён</h1>
+  <p role="alert">Вернись в аккаунты и начни вход заново.</p>
+  {% endif %}
+  <a class="primary sign-in" href="/admin/accounts">К списку аккаунтов</a>
+</section>
+{% endblock %}

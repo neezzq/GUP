@@ -18,6 +18,14 @@ CREATE TABLE IF NOT EXISTS local_sessions (
     launcher TEXT PRIMARY KEY, label TEXT NOT NULL,
     provider TEXT NOT NULL CHECK (provider IN ('official', 'steam')), changed INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS linked_accounts (
+    launcher TEXT PRIMARY KEY, subject TEXT NOT NULL, changed INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS account_link_requests (
+    token TEXT PRIMARY KEY, launcher TEXT NOT NULL, expires INTEGER NOT NULL,
+    session TEXT NOT NULL REFERENCES sessions(token) ON DELETE CASCADE,
+    verifier TEXT NOT NULL, used INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS devices (
     id TEXT PRIMARY KEY, name TEXT NOT NULL, token TEXT NOT NULL UNIQUE,
     allowed TEXT NOT NULL, created INTEGER NOT NULL, seen INTEGER NOT NULL,

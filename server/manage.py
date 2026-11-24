@@ -81,6 +81,7 @@ def copy_database(source, target, vault, restore=False):
             source_connection.backup(destination)
             check_copy(destination, vault)
             if restore:
+                destination.execute("PRAGMA foreign_keys = ON")
                 with destination:
                     for table in ("sessions", "enrollments", "leases", "rate"):
                         destination.execute(f"DELETE FROM {table}")

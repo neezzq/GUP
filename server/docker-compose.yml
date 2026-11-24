@@ -1,6 +1,11 @@
 services:
   backend:
     build: .
+    env_file:
+      - path: .env.oauth
+        required: false
+    environment:
+      GUP_PUBLIC_ORIGIN: https://${GUP_DOMAIN:?Set GUP_DOMAIN in .env}
     restart: unless-stopped
     read_only: true
     cap_drop: [ALL]
@@ -9,7 +14,7 @@ services:
     volumes:
       - gup_data:/data
     secrets: [gup_keys]
-    networks: [private]
+    networks: [private, outbound]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3)"]
       interval: 15s
@@ -50,6 +55,7 @@ networks:
       config:
         - subnet: 172.29.55.0/24
   public: {}
+  outbound: {}
 volumes:
   gup_data: {}
   caddy_data: {}

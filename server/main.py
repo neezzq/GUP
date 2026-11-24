@@ -15,6 +15,10 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from .account_links import (
+    LINK_TTL, OAUTH_PROVIDERS, LinkError, configured_oauth, oauth_authorize,
+    public_origin, steam_authorize, verified_identity, vk_authorize,
+)
 from .database import Database, event
 from .models import (
     Heartbeat, LAUNCHER_NAMES, LAUNCHER_SIGN_INS, Launcher, LeaseAccess, LeaseRequest, Registration, Report,
@@ -32,6 +36,7 @@ ACTIONS = {
     "device_token_rotated": "Токен устройства заменён",
     "enrollment_created": "Создан ключ подключения", "account_save": "Аккаунт сохранён",
     "account_delete": "Аккаунт удалён", "account_local": "Выбрана сессия на компьютере",
+    "account_linked": "Аккаунт подтверждён", "account_unlinked": "Привязка аккаунта удалена",
     "authorization_requested": "Запрошен вход",
     "started": "Начало проверки", "updated": "Установка завершена", "current": "Игры актуальны",
     "error": "Ошибка", "login_required": "Требуется вход",
@@ -42,9 +47,12 @@ COOKIE = "__Host-gup_admin"
 LOGIN_COOKIE = "__Host-gup_login"
 
 
-def create_app(database_path=None, key_path=None):
+def create_app(database_path=None, key_path=None, *, public_url=None):
     database = Database(Path(database_path or os.environ.get("GUP_DATABASE", "/data/gup.sqlite3")))
     key_path = Path(key_path or os.environ.get("GUP_KEYS_FILE", "/run/secrets/gup_keys"))
+    origin = public_origin(public_url if public_url is not None else os.environ.get("GUP_PUBLIC_ORIGIN"))
+    oauth = configured_oauth()
+    linkable = ({Launcher.STEAM} | oauth.keys()) if origin else set()
     templates = Jinja2Templates(directory=HERE / "templates")
     templates.env.filters["utc"] = lambda value: (
         datetime.fromtimestamp(value, timezone.utc).strftime("%Y-%m-%d %H:%M UTC") if value else "—"
@@ -67,12 +75,19 @@ def create_app(database_path=None, key_path=None):
     @app.middleware("http")
     async def headers(request, call_next):
         response = await call_next(request)
+        form_targets = "'self'"
+        if request.url.path == "/admin/accounts":
+            form_targets += " https://steamcommunity.com https://www.epicgames.com https://auth.riotgames.com"
+            form_targets += " https://oauth.battle.net https://account.battle.net https://id.vk.com"
         response.headers.update({
             "Cache-Control": "no-store",
             "X-Content-Type-Options": "nosniff",
             "X-Frame-Options": "DENY",
             "Referrer-Policy": "no-referrer",
-            "Content-Security-Policy": "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+            "Content-Security-Policy": (
+                f"default-src 'none'; style-src 'self'; form-action {form_targets}; "
+                "frame-ancestors 'none'; base-uri 'none'"
+            ),
         })
         return response
 
@@ -252,7 +267,9 @@ def create_app(database_path=None, key_path=None):
     def panel(connection, request, section, session, enrollment=None):
         accounts, devices, events = {}, [], []
         local_sessions = {}
+        linked = {}
         if section == "accounts":
+            linked = {row["launcher"]: row["subject"] for row in connection.execute("SELECT * FROM linked_accounts")}
             local_sessions = {row["launcher"]: row for row in connection.execute("SELECT * FROM local_sessions")}
             for row in connection.execute("SELECT * FROM accounts"):
                 accounts[row["launcher"]] = {
@@ -267,7 +284,8 @@ def create_app(database_path=None, key_path=None):
             events = connection.execute("SELECT * FROM events ORDER BY id DESC LIMIT 200").fetchall()
         return render(request, "panel.html", section=section, csrf=session["csrf"], names=LAUNCHER_NAMES,
                       accounts=accounts, local_sessions=local_sessions, devices=devices, events=events,
-                      enrollment=enrollment, actions=ACTIONS, sign_ins=LAUNCHER_SIGN_INS)
+                      enrollment=enrollment, actions=ACTIONS, sign_ins=LAUNCHER_SIGN_INS,
+                      linked=linked, linkable=linkable, oauth_providers=OAUTH_PROVIDERS.keys() | {Launcher.VKPLAY})
 
     @app.get("/")
     def index():
@@ -334,6 +352,107 @@ def create_app(database_path=None, key_path=None):
             except HTTPException:
                 return RedirectResponse("/admin/login", status_code=303)
             return panel(connection, request, section, session)
+
+    @app.post("/admin/accounts/{launcher}/link")
+    def link_account(launcher: Launcher, request: Request, form_token: str = Form(max_length=100)):
+        now = guard(request, "link_start", 30)
+        state = random_token()
+        verifier = random_token() if launcher == Launcher.VKPLAY else ""
+        with database.transaction(write=True) as connection:
+            session = admin(connection, request, now)
+            csrf(session["csrf"], form_token)
+            if launcher not in linkable:
+                raise HTTPException(404, "Account linking is unavailable")
+            connection.execute(
+                "DELETE FROM account_link_requests WHERE expires<=? OR (launcher=? AND session=?)",
+                (now, launcher, session["token"]),
+            )
+            connection.execute(
+                "INSERT INTO account_link_requests (token,launcher,expires,session,verifier) VALUES (?,?,?,?,?)",
+                (digest(state), launcher, now + LINK_TTL, session["token"], verifier),
+            )
+        callback_url = f"{origin}/admin/accounts/{launcher}/callback"
+        if launcher == Launcher.STEAM:
+            target = steam_authorize(origin, callback_url, state)
+        elif launcher == Launcher.VKPLAY:
+            target = vk_authorize(oauth[launcher][0], callback_url, state, verifier)
+        else:
+            target = oauth_authorize(launcher, oauth[launcher][0], callback_url, state)
+        response = RedirectResponse(target, status_code=303)
+        response.set_cookie(
+            f"__Host-gup_link_{launcher}", state, max_age=LINK_TTL,
+            secure=True, httponly=True, samesite="lax",
+        )
+        return response
+
+    @app.get("/admin/accounts/{launcher}/callback")
+    def account_callback(launcher: Launcher, request: Request):
+        now = guard(request, "link_callback", 30)
+        cookie_name = f"__Host-gup_link_{launcher}"
+        query = dict(request.query_params)
+        state = query.get("state", "")
+        subject = None
+        code = 400
+        browser_state = request.cookies.get(cookie_name, "")
+        matched = (TOKEN_PATTERN.fullmatch(state) and TOKEN_PATTERN.fullmatch(browser_state)
+                   and hmac.compare_digest(browser_state, state))
+        if (launcher in linkable and matched
+                and len(request.scope["query_string"]) <= 8192
+                and len(query) == len(request.query_params.multi_items())):
+            with database.transaction(write=True) as connection:
+                pending = connection.execute(
+                    """
+                    UPDATE account_link_requests SET used=1
+                    WHERE token=? AND launcher=? AND expires>? AND used=0
+                    AND EXISTS (SELECT 1 FROM sessions
+                                WHERE sessions.token=account_link_requests.session AND sessions.expires>?)
+                    RETURNING session, verifier
+                    """, (digest(state), launcher, now, now),
+                ).fetchone()
+            if pending:
+                try:
+                    candidate = verified_identity(
+                        launcher, oauth.get(launcher), query, f"{origin}/admin/accounts/{launcher}/callback",
+                        state, now, pending["verifier"],
+                    )
+                except LinkError:
+                    pass
+                else:
+                    with database.transaction(write=True) as connection:
+                        finished = int(time.time())
+                        confirmed = connection.execute(
+                            """
+                            DELETE FROM account_link_requests WHERE token=? AND used=1 AND expires>?
+                            AND EXISTS (SELECT 1 FROM sessions
+                                        WHERE sessions.token=account_link_requests.session AND sessions.expires>?)
+                            """, (digest(state), finished, finished),
+                        ).rowcount
+                        if confirmed:
+                            connection.execute(
+                                """
+                                INSERT INTO linked_accounts VALUES (?,?,?) ON CONFLICT(launcher) DO UPDATE SET
+                                subject=excluded.subject, changed=excluded.changed
+                                """, (launcher, candidate, now),
+                            )
+                            event(connection, now, "account_linked", launcher=launcher)
+                            subject, code = candidate, 200
+        provider_name = "VK ID" if launcher == Launcher.VKPLAY else LAUNCHER_NAMES[launcher]
+        response = render(request, "account_link.html", name=provider_name, subject=subject)
+        response.status_code = code
+        if matched:
+            response.delete_cookie(cookie_name, secure=True, httponly=True, samesite="lax")
+        return response
+
+    @app.post("/admin/accounts/{launcher}/unlink")
+    def unlink_account(launcher: Launcher, request: Request, form_token: str = Form(max_length=100)):
+        now = guard(request, "panel", 120)
+        with database.transaction(write=True) as connection:
+            session = admin(connection, request, now)
+            csrf(session["csrf"], form_token)
+            connection.execute("DELETE FROM linked_accounts WHERE launcher=?", (launcher,))
+            connection.execute("DELETE FROM account_link_requests WHERE launcher=?", (launcher,))
+            event(connection, now, "account_unlinked", launcher=launcher)
+        return RedirectResponse("/admin/accounts", status_code=303)
 
     @app.post("/admin/accounts/{launcher}")
     def account(launcher: Launcher, request: Request, form_token: str = Form(max_length=100),

@@ -21,12 +21,12 @@ def field(page, name):
 
 
 @pytest.fixture
-def service(tmp_path):
+def service(tmp_path, request):
     path = tmp_path / "data.sqlite3"
     keys = tmp_path / "keys.json"
     create_key(keys, False)
     db = Database(path)
-    with TestClient(create_app(path, keys), base_url="https://updates.example.test") as client:
+    with TestClient(create_app(path, keys, public_url=getattr(request, "param", None)), base_url="https://updates.example.test") as client:
         with db.transaction(write=True) as connection:
             connection.execute("INSERT INTO admin VALUES (1,?,?)", (ADMIN, PASSWORDS.hash(ADMIN_PASSWORD)))
         yield client, db, keys
@@ -262,3 +262,136 @@ def test_accounts_page_offers_official_sign_in_links(service):
     assert {label: url for url, label in links} == expected
     assert "Привязать сессию" not in page.text
     assert "Настроить вход для обновлений на ПК" in page.text
+
+
+@pytest.mark.parametrize("service", ["https://updates.example.test"], indirect=True)
+def test_steam_link_persists_verified_identity_and_rejects_replay(service, monkeypatch):
+    from datetime import datetime, timezone
+    from urllib.parse import parse_qs, urlsplit
+
+    import httpx
+
+    from server.account_links import OPENID_NS, STEAM_OPENID, verify_steam_identity
+    from server.models import Launcher
+
+    client, db, _ = service
+    csrf = admin_login(client)
+    assert client.post("/admin/accounts/steam/link", data={"form_token": "bad"}).status_code == 403
+    assert client.post("/admin/accounts/epic/link", data={"form_token": csrf}).status_code == 404
+    redirect = client.post("/admin/accounts/steam/link", data={"form_token": csrf}, follow_redirects=False)
+    assert redirect.status_code == 303
+    assert redirect.headers["Location"].startswith(STEAM_OPENID)
+    assert "SameSite=lax" in redirect.headers["Set-Cookie"]
+    return_to = parse_qs(urlsplit(redirect.headers["Location"]).query)["openid.return_to"][0]
+    state = parse_qs(urlsplit(return_to).query)["state"][0]
+    claimed = "https://steamcommunity.com/openid/id/76561198000000001"
+    response = {
+        "state": state, "openid.ns": OPENID_NS, "openid.mode": "id_res",
+        "openid.claimed_id": claimed, "openid.identity": claimed, "openid.op_endpoint": STEAM_OPENID,
+        "openid.return_to": return_to, "openid.response_nonce": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") + "suffix",
+        "openid.assoc_handle": "example", "openid.sig": "signed",
+        "openid.signed": "return_to,identity,claimed_id,op_endpoint,response_nonce,assoc_handle",
+    }
+    posts = []
+
+    def provider(request):
+        assert str(request.url) == STEAM_OPENID
+        assert request.method == "POST"
+        assert parse_qs(request.content.decode())["openid.mode"] == ["check_authentication"]
+        posts.append(request.method)
+        return httpx.Response(200, text=f"ns:{OPENID_NS}\nis_valid:true\n")
+
+    def verify(launcher, credentials, query, callback, state, now, verifier):
+        assert launcher == Launcher.STEAM
+        with httpx.Client(transport=httpx.MockTransport(provider)) as steam:
+            return verify_steam_identity(steam, query, callback, state, now)
+
+    monkeypatch.setattr("server.main.verified_identity", verify)
+    admin_cookie = client.cookies.get(COOKIE)
+    client.cookies.delete(COOKIE)  # SameSite=Strict keeps the admin cookie off the external callback.
+    assert client.get("/admin/accounts/steam/callback", params=response).status_code == 200
+    assert posts == ["POST"]
+    client.cookies.set("__Host-gup_link_steam", state)
+    assert client.get("/admin/accounts/steam/callback", params=response).status_code == 400
+    assert posts == ["POST"]
+    with db.transaction() as connection:
+        assert connection.execute("SELECT subject FROM linked_accounts WHERE launcher='steam'").fetchone()[0] == claimed[-17:]
+        assert connection.execute("SELECT COUNT(*) FROM accounts").fetchone()[0] == 0
+    client.cookies.set(COOKIE, admin_cookie)
+    page = client.get("/admin/accounts")
+    assert "Аккаунт подтверждён" in page.text
+    assert claimed[-17:] in page.text
+    assert client.post("/admin/accounts/steam/unlink", data={
+        "form_token": csrf,
+    }, follow_redirects=False).status_code == 303
+    assert claimed[-17:] not in client.get("/admin/accounts").text
+
+
+def test_epic_and_riot_and_battlenet_validate_oauth_identity():
+    from urllib.parse import parse_qs
+
+    import httpx
+    import pytest
+
+    from server.account_links import OAUTH_PROVIDERS, LinkError, verify_oauth_identity
+
+    callback = "https://updates.example.test/provider/callback"
+    requested = []
+    for launcher, provider in OAUTH_PROVIDERS.items():
+        def respond(request):
+            requested.append(str(request.url))
+            if request.method == "POST":
+                assert str(request.url) == provider.token_url
+                assert request.headers["Authorization"].startswith("Basic ")
+                assert parse_qs(request.content.decode())["redirect_uri"] == [callback]
+                return httpx.Response(200, json={"access_token": "provider.token", provider.identity_field: "player123"})
+            assert str(request.url) == provider.profile_url
+            assert request.headers["Authorization"] == "Bearer provider.token"
+            return httpx.Response(200, json={provider.identity_field: "player123"})
+
+        with httpx.Client(transport=httpx.MockTransport(respond)) as provider_client:
+            assert verify_oauth_identity(
+                provider_client, launcher, ("client", "secret"), {"code": "accepted"}, callback,
+            ) == "player123"
+            with pytest.raises(LinkError):
+                verify_oauth_identity(provider_client, launcher, ("client", "secret"), {}, callback)
+        assert requested.pop(0) == provider.token_url
+        if provider.profile_url:
+            assert requested.pop(0) == provider.profile_url
+        assert not requested
+
+
+def test_vk_id_uses_pkce_and_checks_provider_state():
+    import base64
+    import hashlib
+    from urllib.parse import parse_qs, urlsplit
+
+    import httpx
+
+    from server.account_links import LinkError, verify_vk_identity, vk_authorize
+
+    callback = "https://updates.example.test/admin/accounts/vkplay/callback"
+    state, verifier = "state-token", "hashed-on-the-server"
+    authorize = vk_authorize("12345", callback, state, verifier)
+    params = parse_qs(urlsplit(authorize).query)
+    assert params["code_challenge_method"] == ["S256"]
+    expected = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+    assert params["code_challenge"] == [expected]
+    assert verifier not in authorize
+    provider_state = state
+
+    def respond(request):
+        assert request.url.host == "id.vk.com"
+        assert request.url.path == "/oauth2/auth"
+        assert request.url.params["code_verifier"] == verifier
+        assert request.url.params["device_id"] == "vk-device"
+        return httpx.Response(200, json={
+            "state": provider_state, "user_id": 7654321, "access_token": "transient-token",
+        })
+
+    query = {"code": "accepted", "device_id": "vk-device"}
+    with httpx.Client(transport=httpx.MockTransport(respond)) as vk:
+        assert verify_vk_identity(vk, "12345", query, callback, state, verifier) == "7654321"
+        provider_state = "different"
+        with pytest.raises(LinkError):
+            verify_vk_identity(vk, "12345", query, callback, state, verifier)

@@ -2,7 +2,7 @@
 {% block content %}
 {% if section == 'accounts' %}
 <h1>Аккаунты</h1>
-<p class="muted">Кнопки открывают официальные сайты. Для обновления игр войди в установленный лаунчер на каждом компьютере.</p>
+<p class="muted">Привязка подтверждает аккаунт в панели. Для обновления игр войди в установленный лаунчер на каждом компьютере.</p>
 <div class="cards">
 {% for id, name in names.items() %}
 {% set account = accounts.get(id) %}
@@ -14,8 +14,26 @@
   <p class="ok">{{ local.label }} · Вход через лаунчер на ПК</p>
   {% elif account %}
   <p class="ok">Вход по паролю · {{ account.changed | utc }}</p>
-  {% else %}<p class="muted">Настройки входа ещё не заданы</p>{% endif %}
+  {% elif id not in linked %}<p class="muted">Настройки входа ещё не заданы</p>{% endif %}
+  {% if id in linked %}
+  <p class="ok">{{ 'VK ID подтверждён' if id == 'vkplay' else 'Аккаунт подтверждён' }} · {{ linked[id] }}</p>
+  {% endif %}
+  {% if id in linkable %}
+  <form method="post" action="/admin/accounts/{{ id }}/link" class="actions">
+    <input type="hidden" name="form_token" value="{{ csrf }}">
+    <button class="primary">Войти через {{ 'VK ID' if id == 'vkplay' else sign_in_name }}</button>
+    {% if id in linked %}
+    <button class="danger" formaction="/admin/accounts/{{ id }}/unlink">Отвязать аккаунт</button>
+    {% endif %}
+  </form>
+  {% else %}
   <a class="primary sign-in" href="{{ sign_in_url }}" target="_blank" rel="noopener noreferrer">Войти через {{ sign_in_name }}</a>
+  {% if id in oauth_providers %}
+  <p class="muted">Для привязки нужны данные приложения от {{ 'VK ID' if id == 'vkplay' else sign_in_name }}.</p>
+  {% elif id != 'steam' %}
+  <p class="muted">Привязка через сайт пока недоступна.</p>
+  {% endif %}
+  {% endif %}
   <details>
     <summary>Настроить вход для обновлений на ПК</summary>
   <form method="post" action="/admin/accounts/{{ id }}">
