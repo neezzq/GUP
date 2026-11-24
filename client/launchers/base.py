@@ -205,10 +205,15 @@ class Launcher:
         windows = self.ui.windows()
         if not windows:
             return "waiting"
-        if self.ui.challenge(windows):
-            return "challenge"
-        if self.ui.needs_login(windows):
-            return "login" if self.ui.login_form(windows) else "manual_login"
+        if challenge := self.ui.challenge(windows):
+            return challenge
+        needs_login = self.ui.needs_login(windows)
+        if needs_login and self.ui.login_form(windows):
+            return "login"
+        if self.ui.external_sign_in(windows):
+            return "external_login"
+        if needs_login:
+            return "manual_login"
         return "ready" if self.session_evidence(windows) else "unknown"
 
     def session_evidence(self, windows):
@@ -231,10 +236,12 @@ class Launcher:
 
     def check_updates(self):
         windows = self.ui.windows()
-        if self.ui.challenge(windows):
-            return "challenge", {}
+        if challenge := self.ui.challenge(windows):
+            return challenge, {}
         if self.ui.needs_login(windows):
             return "login", {}
+        if self.ui.external_sign_in(windows):
+            return "external_login", {}
         rows = self.ui.game_rows(windows, self.games)
         result = {}
         for game_id, (_, window, button, phase) in rows.items():
@@ -270,10 +277,11 @@ class Launcher:
         while time.monotonic() < deadline:
             tick(unresolved=unresolved)
             state, observations = self.get_progress()
-            if state == "challenge":
-                return Result("confirmation_required", "challenge", queue_safe=not unresolved)
-            if state == "login":
-                return Result("login_required", "login_required", queue_safe=not started and not active)
+            if state in ("challenge", "steam_guard"):
+                return Result("confirmation_required", state, queue_safe=not unresolved)
+            if state in ("login", "external_login"):
+                reason = "external_login" if state == "external_login" else "login_required"
+                return Result("login_required", reason, queue_safe=not started and not active)
             busy = {key for key, item in observations.items() if item.state == "busy"}
             pending = {key for key, item in observations.items() if item.state == "pending"}
             ready = {key for key, item in observations.items() if item.state in {"ready", "installed"}}

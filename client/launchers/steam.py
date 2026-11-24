@@ -112,7 +112,7 @@ class Steam(Launcher):
 
     def check_updates(self):
         state, observations = super().check_updates()
-        if state in ("challenge", "login"):
+        if state in ("challenge", "steam_guard", "login", "external_login"):
             return state, observations
         for game, app in self.manifests():
             flags = number(app, "StateFlags")

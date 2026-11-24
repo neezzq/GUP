@@ -169,6 +169,8 @@ class ExampleAPI:
         ("online", "ready", ["current", "current"], ["steam"]),
         ("online", "login", ["current", "current"], ["steam", "credentials"]),
         ("online", "challenge", ["confirmation_required", "current"], ["steam"]),
+        ("online", "steam_guard", ["confirmation_required", "current"], ["steam"]),
+        ("online", "external_login", ["login_required", "current"], ["steam"]),
         ("offline", "ready", ["current", "current"], []),
         ("offline", "login", ["login_required", "current"], []),
         ("denied", "ready", [], []),
@@ -223,3 +225,23 @@ def test_lease_wait_occurs_before_official_launcher_starts():
     updater.delay = lambda seconds: None
     updater.run()
     assert trace == ["lease_attempt", "lease_attempt", "launch"]
+
+
+def test_launcher_classifies_steam_guard_before_sign_in(monkeypatch):
+    launcher = Launcher()
+    window = object()
+    monkeypatch.setattr(launcher.ui, "windows", lambda: [window])
+    monkeypatch.setattr(launcher.ui, "challenge", lambda windows: "steam_guard")
+    assert launcher.check_auth() == "steam_guard"
+    assert launcher.check_updates() == ("steam_guard", {})
+
+
+def test_launcher_leaves_external_sign_in_to_operator(monkeypatch):
+    launcher = Epic()
+    window = object()
+    monkeypatch.setattr(launcher.ui, "windows", lambda: [window])
+    monkeypatch.setattr(launcher.ui, "challenge", lambda windows: None)
+    monkeypatch.setattr(launcher.ui, "needs_login", lambda windows: True)
+    monkeypatch.setattr(launcher.ui, "login_form", lambda windows: None)
+    monkeypatch.setattr(launcher.ui, "external_sign_in", lambda windows: True)
+    assert launcher.check_auth() == "external_login"

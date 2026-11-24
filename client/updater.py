@@ -113,7 +113,7 @@ class Updater:
             if reserve:
                 reserve.renew_if_due()
             state = launcher.check_auth()
-            if state in ("ready", "login", "challenge", "manual_login"):
+            if state in ("ready", "login", "challenge", "steam_guard", "manual_login", "external_login"):
                 return state
             if can_navigate and state == "unknown" and not navigated and hasattr(launcher, "open_downloads"):
                 launcher.open_downloads()
@@ -155,12 +155,16 @@ class Updater:
 
         self.publish("checking", name)
         state = self.auth_state(launcher, lease, can_navigate=True)
-        if state == "challenge":
-            return Result("confirmation_required", "challenge")
+        if state in ("challenge", "steam_guard"):
+            return Result("confirmation_required", state)
+        if state == "external_login":
+            return Result("login_required", state)
         if state in ("waiting", "unknown"):
             queue, observations = launcher.check_updates()
-            if queue == "challenge":
-                return Result("confirmation_required", "challenge")
+            if queue in ("challenge", "steam_guard"):
+                return Result("confirmation_required", queue)
+            if queue == "external_login":
+                return Result("login_required", queue)
             active = queue == "active" or any(item.state == "busy" for item in observations.values())
             return Result("unverified", "unknown_session", queue_safe=not active)
         if state == "manual_login" or (state == "login" and lease is None):
@@ -168,13 +172,13 @@ class Updater:
         self.boundary()
         if state == "login":
             self.publish("authorizing", name)
-            if not launcher.login(lease.credentials, lease.confirm):
-                return Result("login_required", "login_required")
-            state = self.auth_state(launcher, lease, wait=45)
-            if state == "challenge":
-                return Result("confirmation_required", "challenge")
+            submitted = launcher.login(lease.credentials, lease.confirm)
+            state = self.auth_state(launcher, lease, wait=45) if submitted else launcher.check_auth()
+            if state in ("challenge", "steam_guard"):
+                return Result("confirmation_required", state)
             if state != "ready":
-                return Result("login_required", "login_required")
+                reason = "external_login" if state == "external_login" else "login_required"
+                return Result("login_required", reason)
 
         self.publish("checking", name)
 

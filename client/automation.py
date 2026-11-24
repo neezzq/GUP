@@ -92,6 +92,11 @@ CHALLENGE = re.compile(
     r"подтверждение входа|код подтверждения|код безопасности|двухфактор\w*|restart required|"
     r"требуется перезагрузка|new device|новое устройство|проверьте почту|подтвердите вход)\b"
 )
+STEAM_GUARD = re.compile(r"\bsteam guard\b|\bподтвердите вход в приложении steam\b")
+EXTERNAL_SIGN_IN = re.compile(
+    r"^(?:(?:sign in|log in|continue) with|(?:войти|продолжить) через) "
+    r"(?:steam|google|apple|xbox|playstation|nintendo|facebook|lego)(?: account| аккаунт)?$"
+)
 UPDATE_BUTTONS = {"update", "update now", "обновить", "обновить сейчас"}
 PLAY_BUTTONS = {"play", "запустить", "играть"}
 SIGN_IN_BUTTONS = {"sign in", "log in", "войти"}
@@ -144,8 +149,17 @@ class LauncherUI:
         return [node for node in window.descendants(control_type=kind) if visible(node)]
 
     def challenge(self, windows):
-        return any(CHALLENGE.search(normalized(node.window_text()))
-                   for window in windows for node in [window, *self.controls(window, "Text")])
+        texts = [normalized(node.window_text()) for window in windows
+                 for node in [window, *self.controls(window, "Text")]]
+        if any(STEAM_GUARD.search(text) for text in texts):
+            return "steam_guard"
+        return "challenge" if any(CHALLENGE.search(text) for text in texts) else None
+
+    def external_sign_in(self, windows):
+        return any(
+            EXTERNAL_SIGN_IN.fullmatch(normalized(button.window_text()))
+            for window in windows for button in self.controls(window, "Button")
+        )
 
     def trusted_login_scope(self, scope, window):
         while scope is not None:

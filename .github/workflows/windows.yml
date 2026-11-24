@@ -41,3 +41,53 @@ jobs:
             dist/GameUpdater.exe
             dist/GameUpdater.exe.sha256
             THIRD_PARTY.md
+
+  publish:
+    name: Publish GitHub release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: GameUpdater-Windows-x64
+          path: release-assets
+      - name: Verify and publish
+        shell: bash
+        run: |
+          version=$(awk -F '"' '/^VERSION = "/ { print $2 }' client/api.py)
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          tag="v${version}-build.${GITHUB_RUN_NUMBER}"
+          (
+            cd release-assets/dist
+            tr -d '\r' < GameUpdater.exe.sha256 | sha256sum --check -
+          )
+          assets=(release-assets/dist/GameUpdater.exe release-assets/dist/GameUpdater.exe.sha256 release-assets/THIRD_PARTY.md)
+          if gh release view "$tag" --json isDraft,targetCommitish > "$RUNNER_TEMP/release.json"; then
+            jq -e --arg sha "$GITHUB_SHA" '.targetCommitish == $sha' "$RUNNER_TEMP/release.json"
+            if jq -e '.isDraft == false' "$RUNNER_TEMP/release.json"; then
+              exit 0
+            fi
+            gh release upload "$tag" "${assets[@]}" --clobber
+          else
+            cat > "$RUNNER_TEMP/release-notes.md" <<NOTES
+          Game Updater для Windows x64. Скачайте GameUpdater.exe и файл SHA-256.
+
+          Исходный коммит: ${GITHUB_SHA}
+          [Сборка и тесты](https://github.com/${GH_REPO}/actions/runs/${GITHUB_RUN_ID})
+
+          EXE без подписи издателя. Для приёмки обновлений нужны реальные игровые клиенты.
+          NOTES
+            gh release create "$tag" "${assets[@]}" --target "$GITHUB_SHA" \
+              --title "Game Updater v${version} (сборка ${GITHUB_RUN_NUMBER})" \
+              --notes-file "$RUNNER_TEMP/release-notes.md" --draft --prerelease
+          fi
+          gh release edit "$tag" --draft=false

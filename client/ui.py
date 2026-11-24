@@ -47,6 +47,8 @@ LABELS = {
     "offline": ("Локальные сессии", "Local sessions"),
     "rejected": ("Доступ отклонён", "Access denied"),
     "challenge": ("Подтвердите действие в клиенте", "Confirm in the official client"),
+    "steam_guard": ("Подтвердите Steam Guard в Steam или на телефоне", "Confirm Steam Guard in Steam or on your phone"),
+    "external_login": ("Выберите провайдера в официальном окне входа", "Choose your provider in the official sign-in window"),
     "unknown_session": ("Не подтверждена сессия клиента", "Launcher session could not be verified"),
     "unknown_update": ("Клиент не подтвердил состояние всех игр", "Launcher did not confirm all game states"),
     "previous_active": ("Предыдущая очередь может работать", "Previous queue may still be active"),
@@ -342,7 +344,8 @@ class Window(tk.CTk):
         reason = item.result.reason if item.result else ""
         if item.result:
             self.results[key] = item.result
-        label = self.label("not_installed" if reason == "not_installed" else status)
+        display = reason if reason in {"not_installed", "steam_guard", "external_login"} else status
+        label = self.label(display)
         if item.pending is not None:
             label += f" · {item.pending}"
         if item.result and (item.result.updated or item.result.current):
@@ -371,7 +374,7 @@ class Window(tk.CTk):
         self.overall_title.configure(text=f"{self.t('Обработка клиентов', 'Launcher queue')}  {processed}/{item.total}")
         self.overall.set(processed / item.total if item.total else 0)
         if item.result or status in {"launching", "authorizing", "update_available"}:
-            details = f" · {self.label(reason)}" if reason and reason != status else ""
+            details = f" · {self.label(reason)}" if reason and reason != display else ""
             game = f" · {item.game}" if item.game else ""
             self.log(f"{LAUNCHERS[key]} · {label}{details}{game}", f"{key} {status} {reason}")
 
