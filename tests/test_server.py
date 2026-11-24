@@ -239,3 +239,26 @@ def test_switching_to_local_session_explicitly_revokes_vault_lease(service):
     assert client.get("/api/v1/launchers/config", headers=device_headers(device)).json() == {
         "launchers": ["steam"], "local_sessions": {},
     }
+
+
+def test_accounts_page_offers_official_sign_in_links(service):
+    client, _, _ = service
+    admin_login(client)
+    page = client.get("/admin/accounts")
+    expected = {
+        "Steam": "https://store.steampowered.com/login/",
+        "Epic Games": "https://www.epicgames.com/id/login",
+        "Riot": "https://account.riotgames.com/",
+        "Battle.net": "https://account.battle.net/",
+        "VK Play": "https://vkplay.ru/",
+        "EA": "https://myaccount.ea.com/cp-ui/aboutme/index",
+        "Lesta": "https://lesta.ru/personal/",
+    }
+    links = re.findall(
+        r'<a class="primary sign-in" href="([^"]+)" target="_blank" rel="noopener noreferrer">Войти через ([^<]+)</a>',
+        page.text,
+    )
+    assert len(links) == len(expected)
+    assert {label: url for url, label in links} == expected
+    assert "Привязать сессию" not in page.text
+    assert "Настроить вход для обновлений на ПК" in page.text

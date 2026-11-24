@@ -2,18 +2,22 @@
 {% block content %}
 {% if section == 'accounts' %}
 <h1>Аккаунты</h1>
-<p class="muted">Чтобы использовать сохранённую сессию, укажи ник и войди в официальный клиент на каждом компьютере.</p>
+<p class="muted">Кнопки открывают официальные сайты. Для обновления игр войди в установленный лаунчер на каждом компьютере.</p>
 <div class="cards">
 {% for id, name in names.items() %}
 {% set account = accounts.get(id) %}
 {% set local = local_sessions.get(id) %}
+{% set sign_in_name, sign_in_url = sign_ins[id] %}
 <section class="card">
   <h2>{{ name }}</h2>
   {% if local %}
-  <p class="ok">{{ local.label }} · Сессия на компьютере</p>
+  <p class="ok">{{ local.label }} · Вход через лаунчер на ПК</p>
   {% elif account %}
   <p class="ok">Вход по паролю · {{ account.changed | utc }}</p>
-  {% else %}<p class="muted">Ожидает настройки</p>{% endif %}
+  {% else %}<p class="muted">Настройки входа ещё не заданы</p>{% endif %}
+  <a class="primary sign-in" href="{{ sign_in_url }}" target="_blank" rel="noopener noreferrer">Войти через {{ sign_in_name }}</a>
+  <details>
+    <summary>Настроить вход для обновлений на ПК</summary>
   <form method="post" action="/admin/accounts/{{ id }}">
     <input type="hidden" name="form_token" value="{{ csrf }}">
     <label>Название или ник аккаунта<input name="label" maxlength="80" value="{{ local.label if local else '' }}" required></label>
@@ -29,10 +33,11 @@
     <label class="choice"><input type="checkbox" name="remove_password" value="true" required> Удалить с сервера сохранённые данные для входа</label>
     {% endif %}
     <div class="actions">
-      <button class="primary" name="action" value="local">{{ 'Сохранить сессию' if local else 'Привязать сессию' }}</button>
-      {% if local %}<button class="danger" name="action" value="delete" formnovalidate>Отвязать</button>{% endif %}
+      <button class="primary" name="action" value="local">Сохранить настройки</button>
+      {% if local %}<button class="danger" name="action" value="delete" formnovalidate>Удалить настройки</button>{% endif %}
     </div>
   </form>
+  </details>
   <details {% if account %}open{% endif %}>
     <summary>Вход по логину и паролю</summary>
   <form method="post" action="/admin/accounts/{{ id }}">

@@ -17,7 +17,7 @@ from fastapi.templating import Jinja2Templates
 
 from .database import Database, event
 from .models import (
-    Heartbeat, LAUNCHER_NAMES, Launcher, LeaseAccess, LeaseRequest, Registration, Report,
+    Heartbeat, LAUNCHER_NAMES, LAUNCHER_SIGN_INS, Launcher, LeaseAccess, LeaseRequest, Registration, Report,
 )
 from .security import PASSWORDS, Vault, accept_request, digest, random_token
 
@@ -267,7 +267,7 @@ def create_app(database_path=None, key_path=None):
             events = connection.execute("SELECT * FROM events ORDER BY id DESC LIMIT 200").fetchall()
         return render(request, "panel.html", section=section, csrf=session["csrf"], names=LAUNCHER_NAMES,
                       accounts=accounts, local_sessions=local_sessions, devices=devices, events=events,
-                      enrollment=enrollment, actions=ACTIONS)
+                      enrollment=enrollment, actions=ACTIONS, sign_ins=LAUNCHER_SIGN_INS)
 
     @app.get("/")
     def index():

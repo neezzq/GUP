@@ -19,6 +19,16 @@ LAUNCHER_NAMES = dict(zip(Launcher, (
     "EA App", "Lesta Game Center",
 ), strict=True))
 
+LAUNCHER_SIGN_INS = {
+    Launcher.STEAM: ("Steam", "https://store.steampowered.com/login/"),
+    Launcher.EPIC: ("Epic Games", "https://www.epicgames.com/id/login"),
+    Launcher.RIOT: ("Riot", "https://account.riotgames.com/"),
+    Launcher.BATTLENET: ("Battle.net", "https://account.battle.net/"),
+    Launcher.VKPLAY: ("VK Play", "https://vkplay.ru/"),
+    Launcher.EA: ("EA", "https://myaccount.ea.com/cp-ui/aboutme/index"),
+    Launcher.LESTA: ("Lesta", "https://lesta.ru/personal/"),
+}
+
 
 class ReportStatus(StrEnum):
     STARTED = "started"

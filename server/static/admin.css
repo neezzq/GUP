@@ -16,7 +16,9 @@ h1 { font-size: 1.8rem; } h2 { margin-top: 0; font-size: 1.05rem; }
 label { display: block; margin-bottom: .85rem; }
 input:not([type=checkbox]), select { display: block; width: 100%; margin-top: .3rem; padding: .6rem; border: 1px solid #414550; border-radius: .4rem; background: #101114; color: inherit; }
 button { cursor: pointer; border: 1px solid #424654; border-radius: .4rem; padding: .45rem .8rem; background: #292c33; color: inherit; font: inherit; }
-button.primary { background: #548cff; color: #101114; border-color: #548cff; font-weight: 650; }
+button.primary, .sign-in { background: #548cff; color: #101114; border-color: #548cff; font-weight: 650; }
+.sign-in { display: inline-block; padding: .45rem .8rem; border-radius: .4rem; text-decoration: none; }
+.sign-in:hover { background: #8bb1ff; }
 button.danger { color: #ffa2a0; }
 :focus-visible { outline: 2px solid #8bb1ff; outline-offset: 2px; }
 fieldset { margin: 0 0 1rem; border-color: #424654; }
