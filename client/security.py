@@ -39,26 +39,37 @@ def enter_instance():
     return mutex
 
 
-def interactive_desktop():
+def session_blocker(win32ts, own_session):
+    handle = win32ts.WTS_CURRENT_SERVER_HANDLE
+    try:
+        sessions = win32ts.WTSEnumerateSessions(handle)
+    except Exception:
+        return "session_check_failed"
+    if not any(item["SessionId"] == own_session and item["State"] == win32ts.WTSActive for item in sessions):
+        return "inactive_session"
+    for item in sessions:
+        session = item["SessionId"]
+        if session in (0, own_session) or item["State"] == win32ts.WTSListen:
+            continue
+        try:
+            if win32ts.WTSQuerySessionInformation(handle, session, win32ts.WTSUserName):
+                return "other_session"
+        except Exception:
+            return "session_check_failed"
+    return None
+
+
+def desktop_blocker():
     import ctypes
     from ctypes import wintypes
     import win32ts
 
-    handle = win32ts.WTS_CURRENT_SERVER_HANDLE
     session_id = wintypes.DWORD()
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
     if not kernel.ProcessIdToSessionId(os.getpid(), ctypes.byref(session_id)):
-        return False
-    own_session = session_id.value
-    sessions = win32ts.WTSEnumerateSessions(handle)
-    if not any(item["SessionId"] == own_session and item["State"] == win32ts.WTSActive for item in sessions):
-        return False
-    for item in sessions:
-        session = item["SessionId"]
-        if session in (0, own_session):
-            continue
-        if win32ts.WTSQuerySessionInformation(handle, session, win32ts.WTSUserName):
-            return False
+        return "session_check_failed"
+    if blocker := session_blocker(win32ts, session_id.value):
+        return blocker
 
     user = ctypes.WinDLL("user32", use_last_error=True)
     user.OpenInputDesktop.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
@@ -69,11 +80,11 @@ def interactive_desktop():
     user.CloseDesktop.argtypes = (wintypes.HANDLE,)
     desktop = user.OpenInputDesktop(0, False, 0x0001)
     if not desktop:
-        return False
+        return "desktop"
     try:
         name, needed = ctypes.create_unicode_buffer(256), wintypes.DWORD()
         ok = user.GetUserObjectInformationW(desktop, 2, name, ctypes.sizeof(name), ctypes.byref(needed))
-        return bool(ok) and name.value.casefold() == "default"
+        return None if ok and name.value.casefold() == "default" else "desktop"
     finally:
         user.CloseDesktop(desktop)
 

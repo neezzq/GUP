@@ -149,7 +149,7 @@ class Updater:
                 break
             except OSError:
                 if attempt == 3:
-                    raise
+                    return Result("error", "launcher_start_failed")
                 self.delay(2 ** attempt)
 
         self.publish("checking", name)

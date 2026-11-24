@@ -60,6 +60,10 @@ LABELS = {
     "previous_active": ("Предыдущая очередь может работать", "Previous queue may still be active"),
     "timeout": ("Истекло время наблюдения", "Monitoring timed out"),
     "desktop": ("Рабочий стол занят или заблокирован", "Desktop is locked or another session is open"),
+    "inactive_session": ("Перейдите в активный сеанс Windows", "Switch to an active Windows session"),
+    "other_session": ("Другой пользователь вошёл в Windows", "Another user is signed in to Windows"),
+    "session_check_failed": ("Не удалось проверить сеансы Windows", "Could not verify Windows sessions"),
+    "launcher_start_failed": ("Не удалось запустить лаунчер", "Could not start the launcher"),
     "running_game": ("Обнаружена запущенная игра", "A game is running"),
     "disk": ("Недостаточно места на диске", "Insufficient disk space"),
     "signature": ("Путь или подпись клиента не подтверждены", "Launcher path or signature could not be verified"),
@@ -450,6 +454,7 @@ class Window(tk.CTk):
         if status == "finished":
             result = item.result
             attention = sum(r.status in {"confirmation_required", "login_required", "error", "unverified", "busy"}
+                            or (r.status == "skipped" and r.reason != "not_installed")
                             for r in self.results.values())
             caption = self.t(
                 f"Обновлено {result.updated} · актуально {result.current} · требуют внимания {attention}",
@@ -470,9 +475,7 @@ class Window(tk.CTk):
         reason = item.result.reason if item.result else ""
         if item.result:
             self.results[key] = item.result
-        display = reason if reason in {
-            "not_installed", "steam_guard", "external_login", "local_session_required", "epic_steam_session",
-        } else status
+        display = reason if reason in LABELS else status
         label = self.label(display)
         if item.pending is not None:
             label += f" · {item.pending}"

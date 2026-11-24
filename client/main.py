@@ -53,6 +53,7 @@ def main():
         credential_store()
         assert len(adapters()) == 7
         assert win32cred.CredRead and win32ts.WTSEnumerateSessions
+        assert win32ts.WTSListen != win32ts.WTSActive
         with TemporaryDirectory(prefix="gup-smoke-") as temporary:
             window = Window(Path(temporary), {})
             window.withdraw()

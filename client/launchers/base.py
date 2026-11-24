@@ -11,9 +11,9 @@ import psutil
 
 from client.automation import (
     BUSY_TEXT, PLAY_BUTTONS, UPDATE_BUTTONS, LauncherUI, active_game,
-    installed_programs, normalized, running_programs,
+    installed_programs, normalized, running_programs, show_launcher_window,
 )
-from client.security import interactive_desktop, verified_binary
+from client.security import desktop_blocker, verified_binary
 
 
 class UnsafeDesktop(Exception):
@@ -143,14 +143,18 @@ class Launcher:
         )
 
     def owns_window(self, window, *, fresh=False):
-        if self.exe is None:
-            return False
         try:
             import win32process
 
             _, pid = win32process.GetWindowThreadProcessId(window.handle)
-            if pid != window.element_info.process_id:
-                return False
+            return pid == window.element_info.process_id and self.owns_process(pid, fresh=fresh)
+        except (OSError, psutil.Error, AttributeError):
+            return False
+
+    def owns_process(self, pid, *, fresh=False):
+        if self.exe is None:
+            return False
+        try:
             process = psutil.Process(pid)
             own = psutil.Process()
             if process.username().casefold() != own.username().casefold():
@@ -170,8 +174,8 @@ class Launcher:
 
     def safety(self, *, check_space=True):
         try:
-            if not interactive_desktop():
-                raise UnsafeDesktop("desktop")
+            if blocker := desktop_blocker():
+                raise UnsafeDesktop(blocker)
             if active_game(self.protected_games or self.games, running_programs()):
                 raise UnsafeDesktop("running_game")
             if check_space:
@@ -188,11 +192,16 @@ class Launcher:
 
     def launch(self):
         self.safety()
-        if any(exe == self.exe for _, exe in running_programs()):
-            return
         if not verified_binary(self.exe, self.publishers):
             raise UnsafeDesktop("signature")
-        self.spawned = subprocess.Popen([str(self.exe)], cwd=self.exe.parent)
+        names = {self.exe.name.casefold(), *(Path(path).name.casefold() for path in self.helper_paths)}
+        pids = {process.pid for process, exe in running_programs()
+                if exe.name.casefold() in names and self.matches_process(exe)}
+        if pids and show_launcher_window(pids, self.owns_process):
+            return
+        process = subprocess.Popen([str(self.exe)], cwd=self.exe.parent)
+        if not pids:
+            self.spawned = process
 
     def discover_games(self):
         return self.registry_games(self.publishers)

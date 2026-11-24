@@ -83,6 +83,45 @@ def active_game(games, programs):
     return any(any(exe.is_relative_to(path) for path in roots) for _, exe in programs)
 
 
+def show_launcher_window(pids, owns_process):
+    import ctypes
+    from ctypes import wintypes
+    import pywintypes
+    import win32con
+    import win32gui
+    import win32process
+
+    windows = []
+
+    def collect(hwnd, _):
+        if (win32gui.IsWindowVisible(hwnd) and win32gui.GetWindowText(hwnd)
+                and not win32gui.GetWindow(hwnd, win32con.GW_OWNER)):
+            _, pid = win32process.GetWindowThreadProcessId(hwnd)
+            if pid in pids and owns_process(pid):
+                windows.append(hwnd)
+        return True
+
+    try:
+        win32gui.EnumWindows(collect, None)
+        if not windows:
+            return False
+        hwnd = windows[0]
+        if win32gui.IsIconic(hwnd):
+            restore = ctypes.WinDLL("user32", use_last_error=True).ShowWindowAsync
+            restore.argtypes = (wintypes.HWND, ctypes.c_int)
+            restore.restype = wintypes.BOOL
+            if not restore(hwnd, win32con.SW_RESTORE):
+                return False
+        try:
+            win32gui.SetForegroundWindow(hwnd)
+        except pywintypes.error:
+            # Windows can deny focus even after the launcher window has opened.
+            pass
+        return True
+    except pywintypes.error:
+        return False
+
+
 def normalized(text):
     return " ".join((text or "").casefold().split())
 

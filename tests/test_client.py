@@ -310,3 +310,64 @@ def test_launcher_config_supports_existing_server_and_rejects_overlapping_passwo
     assert config({"launchers": ["epic", "steam"], "local_sessions": {"epic": "steam"}}) == LauncherConfig(
         frozenset({"steam"}), {"epic": "steam"},
     )
+
+
+def test_session_check_ignores_rdp_listener_and_blocks_another_user():
+    from types import SimpleNamespace
+    from client.security import session_blocker
+
+    sessions = [{"SessionId": 3, "State": 0}, {"SessionId": 65536, "State": 6}]
+    inspected = []
+
+    def username(handle, session, kind):
+        inspected.append(session)
+        return "player"
+
+    wts = SimpleNamespace(
+        WTS_CURRENT_SERVER_HANDLE=0, WTSActive=0, WTSListen=6, WTSUserName=5,
+        WTSEnumerateSessions=lambda handle: sessions, WTSQuerySessionInformation=username,
+    )
+    assert session_blocker(wts, 3) is None
+    assert inspected == []
+    sessions.append({"SessionId": 4, "State": 4})
+    assert session_blocker(wts, 3) == "other_session"
+    assert inspected == [4]
+
+
+@pytest.mark.parametrize("visible_window", [True, False])
+def test_existing_launcher_raises_window_or_reopens_official_exe(tmp_path, monkeypatch, visible_window):
+    from types import SimpleNamespace
+
+    launcher = Launcher()
+    launcher.exe = tmp_path / "Launcher.exe"
+    monkeypatch.setattr(launcher, "safety", lambda: None)
+    monkeypatch.setattr("client.launchers.base.verified_binary", lambda *args: True)
+    monkeypatch.setattr("client.launchers.base.running_programs", lambda: ((SimpleNamespace(pid=83), launcher.exe),))
+    opened, restored = [], []
+
+    def show(pids, owns_process):
+        restored.append(pids)
+        return visible_window
+
+    monkeypatch.setattr("client.launchers.base.show_launcher_window", show)
+    monkeypatch.setattr("client.launchers.base.subprocess.Popen", lambda args, cwd: opened.append((args, cwd)))
+    launcher.launch()
+    assert restored == [{83}]
+    assert opened == ([] if visible_window else [([str(launcher.exe)], tmp_path)])
+    assert launcher.spawned is None
+
+
+def test_failed_launcher_start_does_not_prevent_next_launcher():
+    class BrokenSteam(ExampleLauncher):
+        def launch(self):
+            raise OSError
+
+    class Epic(ExampleLauncher):
+        key = "epic"
+
+    notices = []
+    runner = Updater({"maintenance": True}, ExampleAPI(), notices.append, {"steam": BrokenSteam, "epic": Epic})
+    runner.delay = lambda seconds: None
+    runner.run()
+    assert [(item.launcher, item.result.status, item.result.reason) for item in notices
+            if item.launcher and item.result] == [("steam", "error", "launcher_start_failed"), ("epic", "current", "")]
