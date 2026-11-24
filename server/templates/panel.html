@@ -1,0 +1,74 @@
+{% extends 'layout.html' %}
+{% block content %}
+{% if section == 'accounts' %}
+<h1>Аккаунты</h1>
+<div class="cards">
+{% for id, name in names.items() %}
+{% set account = accounts.get(id) %}
+<section class="card">
+  <h2>{{ name }}</h2>
+  {% if account %}
+  <p class="ok">Настроен · {{ account.changed | utc }}</p>
+  {% else %}<p class="muted">Ожидает настройки</p>{% endif %}
+  <form method="post" action="/admin/accounts/{{ id }}">
+    <input type="hidden" name="form_token" value="{{ csrf }}">
+    <label>Логин или email<input name="username" maxlength="320" autocomplete="off" value="{{ account.username if account else '' }}" required></label>
+    <label>{{ 'Новый пароль' if account else 'Пароль' }}<input name="password" type="password" maxlength="1024" autocomplete="new-password" required></label>
+    <div class="actions">
+      <button class="primary" name="action" value="save">{{ 'Изменить' if account else 'Добавить' }}</button>
+      {% if account %}
+      <button class="danger" name="action" value="delete" formnovalidate>Удалить</button>
+      {% endif %}
+    </div>
+  </form>
+</section>
+{% endfor %}
+</div>
+{% elif section == 'devices' %}
+<h1>Компьютеры</h1>
+<section class="card">
+  <h2>Одноразовый ключ</h2>
+  {% if enrollment %}
+  <label>Ключ действует 10 минут<input readonly value="{{ enrollment }}"></label>
+  {% endif %}
+  <form method="post" action="/admin/devices/enrollment">
+    <input type="hidden" name="form_token" value="{{ csrf }}">
+    <fieldset>
+      <legend>К каким аккаунтам разрешён доступ</legend>
+      {% for id, name in names.items() %}
+      <label class="choice"><input type="checkbox" name="launchers" value="{{ id }}"> {{ name }}</label>
+      {% endfor %}
+    </fieldset>
+    <button class="primary">Создать ключ</button>
+  </form>
+</section>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Компьютер и ID</th><th>Подключён</th><th>Активность</th><th>Версия</th><th>Доступ</th><th></th></tr></thead>
+  <tbody>
+  {% for device in devices %}
+  <tr><td>{{ device.name }}<br><small>{{ device.id }}</small></td><td>{{ device.created | utc }}</td><td>{{ device.seen | utc }}</td>
+    <td>{{ device.version }}</td><td>{{ 'Отозван' if device.revoked else 'Активен' }}</td>
+    <td>{% if not device.revoked %}<form method="post" action="/admin/devices/{{ device.id }}/revoke">
+      <input type="hidden" name="form_token" value="{{ csrf }}"><button class="danger">Отозвать</button>
+    </form>{% endif %}</td></tr>
+  {% else %}<tr><td colspan="6">Подключённых компьютеров пока нет.</td></tr>{% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<h1>Журнал</h1>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Время</th><th>Событие</th><th>Устройство</th><th>Клиент</th><th>Обновлено / актуально</th></tr></thead>
+  <tbody>
+  {% for event in events %}
+  <tr><td>{{ event.at | utc }}</td><td>{{ actions.get(event.action, event.action) }}</td>
+  <td><small>{{ event.device or '—' }}</small></td><td>{{ names.get(event.launcher, '—') }}</td>
+  <td>{{ event.updated }} / {{ event.current }}</td></tr>
+  {% else %}<tr><td colspan="5">Событий пока нет.</td></tr>{% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}

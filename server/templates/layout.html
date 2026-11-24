@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Game Updater</title>
+  <link rel="stylesheet" href="/static/admin.css">
+</head>
+<body>
+<header><div class="brand">Game Updater</div>
+{% if section %}
+<nav aria-label="Разделы">
+  {% for id, label in [('accounts', 'Аккаунты'), ('devices', 'Компьютеры'), ('journal', 'Журнал')] %}
+  <a href="/admin/{{ id }}" {% if section == id %}aria-current="page"{% endif %}>{{ label }}</a>
+  {% endfor %}
+</nav>
+<form method="post" action="/admin/logout"><input type="hidden" name="form_token" value="{{ csrf }}"><button>Выйти</button></form>
+{% endif %}
+</header>
+<main>{% block content %}{% endblock %}</main>
+</body>
+</html>

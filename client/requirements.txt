@@ -1,0 +1,9 @@
+customtkinter==5.2.2
+pywinauto==0.6.9; sys_platform == "win32"
+pywin32==311; sys_platform == "win32"
+psutil==7.2.1
+httpx==0.28.1
+keyring==25.7.0
+Pillow==12.1.1
+vdf==3.4
+pyinstaller==6.19.0; sys_platform == "win32"
