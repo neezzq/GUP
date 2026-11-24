@@ -115,9 +115,9 @@ def test_vault_and_lease_permissions(service, caplog):
     a = register(client, enroll(client, csrf, "steam")).json()
     b = register(client, enroll(client, csrf, "steam")).json()
     c = register(client, enroll(client, csrf, "epic")).json()
-    assert client.get("/api/v1/launchers/config", headers=device_headers(a)).json() == {"launchers": ["steam"]}
+    assert client.get("/api/v1/launchers/config", headers=device_headers(a)).json() == {"launchers": ["steam"], "local_sessions": {}}
     assert client.get("/api/v1/launchers/config").status_code == 401
-    assert client.get("/api/v1/launchers/config", headers=device_headers(c)).json() == {"launchers": []}
+    assert client.get("/api/v1/launchers/config", headers=device_headers(c)).json() == {"launchers": [], "local_sessions": {}}
     assert api(client, "auth/lease", c, {"launcher": "steam"}).status_code == 403
     response = api(client, "auth/lease", a, {"launcher": "steam"})
     assert response.status_code == 200
@@ -196,3 +196,46 @@ def test_rotate_device_token_replaces_active_token_and_lease(service):
     assert api(client, "devices/heartbeat", old, {"version": VERSION}).status_code == 401
     assert api(client, "devices/heartbeat", new, {"version": VERSION}).status_code == 200
     assert api(client, "auth/lease", new, {"launcher": "steam"}).status_code == 200
+
+
+def test_link_epic_session_without_storing_credentials(service):
+    client, db, _ = service
+    csrf = admin_login(client)
+    form = {"form_token": csrf, "action": "local", "label": "Клубный Epic", "provider": "steam"}
+    assert client.post("/admin/accounts/epic", data=form, follow_redirects=False).status_code == 303
+    assert "Клубный Epic" in client.get("/admin/accounts").text
+    with db.transaction() as connection:
+        assert connection.execute("SELECT * FROM accounts WHERE launcher='epic'").fetchone() is None
+    allowed = register(client, enroll(client, csrf, "epic")).json()
+    other = register(client, enroll(client, csrf, "steam")).json()
+    assert client.get("/api/v1/launchers/config", headers=device_headers(allowed)).json() == {
+        "launchers": [], "local_sessions": {"epic": "steam"},
+    }
+    assert client.get("/api/v1/launchers/config", headers=device_headers(other)).json() == {
+        "launchers": [], "local_sessions": {},
+    }
+    assert api(client, "auth/lease", allowed, {"launcher": "epic"}).status_code == 404
+    assert client.post("/admin/accounts/epic", data={
+        "form_token": csrf, "action": "delete",
+    }, follow_redirects=False).status_code == 303
+    assert client.get("/api/v1/launchers/config", headers=device_headers(allowed)).json()["local_sessions"] == {}
+
+
+def test_switching_to_local_session_explicitly_revokes_vault_lease(service):
+    client, db, _ = service
+    csrf = admin_login(client)
+    assert account(client, csrf).status_code == 303
+    device = register(client, enroll(client, csrf, "steam")).json()
+    token = api(client, "auth/lease", device, {"launcher": "steam"}).json()["lease"]
+    form = {"form_token": csrf, "action": "local", "label": "Клубный Steam"}
+    assert client.post("/admin/accounts/steam", data=form).status_code == 409
+    assert api(client, "auth/renew", device, {"launcher": "steam", "lease": token}).status_code == 200
+    form["remove_password"] = "true"
+    assert client.post("/admin/accounts/steam", data=form, follow_redirects=False).status_code == 303
+    assert api(client, "auth/credentials", device, {"launcher": "steam", "lease": token}).status_code == 409
+    with db.transaction() as connection:
+        assert connection.execute("SELECT * FROM accounts WHERE launcher='steam'").fetchone() is None
+    assert account(client, csrf).status_code == 303
+    assert client.get("/api/v1/launchers/config", headers=device_headers(device)).json() == {
+        "launchers": ["steam"], "local_sessions": {},
+    }

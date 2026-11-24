@@ -120,7 +120,7 @@ class Updater:
             self.delay(1)
         return state
 
-    def process(self, launcher, configured):
+    def process(self, launcher, configured, provider=None):
         name = launcher.key
 
         def before_wait():
@@ -130,7 +130,7 @@ class Updater:
         manager = self.reserve(name, before_wait) if configured else nullcontext()
         with manager as lease:
             try:
-                result = self.process_reserved(launcher, lease)
+                result = self.process_reserved(launcher, lease, provider)
             except (Cancelled, MonitoringStopped, ServerRejected, ServerUnavailable):
                 if lease:
                     lease.defer_release = True
@@ -139,7 +139,7 @@ class Updater:
                 lease.defer_release = True
             return result
 
-    def process_reserved(self, launcher, lease):
+    def process_reserved(self, launcher, lease, provider):
         name = launcher.key
         self.publish("launching", name)
         for attempt in range(4):
@@ -154,20 +154,24 @@ class Updater:
 
         self.publish("checking", name)
         state = self.auth_state(launcher, lease, can_navigate=True)
+        manual_reason = {
+            "steam": "epic_steam_session",
+            "official": "local_session_required",
+        }.get(provider)
         if state in ("challenge", "steam_guard"):
             return Result("confirmation_required", state)
         if state == "external_login":
-            return Result("login_required", state)
+            return Result("login_required", manual_reason or state)
         if state in ("waiting", "unknown"):
             queue, observations = launcher.check_updates()
             if queue in ("challenge", "steam_guard"):
                 return Result("confirmation_required", queue)
             if queue == "external_login":
-                return Result("login_required", queue)
+                return Result("login_required", manual_reason or queue)
             active = queue == "active" or any(item.state == "busy" for item in observations.values())
             return Result("unverified", "unknown_session", queue_safe=not active)
         if state == "manual_login" or (state == "login" and lease is None):
-            return Result("login_required", "login_required")
+            return Result("login_required", manual_reason or "login_required")
         self.boundary()
         if state == "login":
             self.publish("authorizing", name)
@@ -273,7 +277,10 @@ class Updater:
                     if configured is not None:
                         self.report(key, "started")
                     try:
-                        result = self.process(launchers[key], key in (configured or ()))
+                        result = self.process(
+                            launchers[key], configured is not None and key in configured.passwords,
+                            configured.local_sessions.get(key) if configured is not None else None,
+                        )
                     except LeaseServerOffline:
                         configured = None
                         self.publish("offline")

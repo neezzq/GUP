@@ -14,7 +14,7 @@ h1 { font-size: 1.8rem; } h2 { margin-top: 0; font-size: 1.05rem; }
 .muted, small { color: #a0a5b0; } .ok { color: #6edd89; }
 .actions { display: flex; flex-wrap: wrap; gap: .6rem; }
 label { display: block; margin-bottom: .85rem; }
-input:not([type=checkbox]) { display: block; width: 100%; margin-top: .3rem; padding: .6rem; border: 1px solid #414550; border-radius: .4rem; background: #101114; color: inherit; }
+input:not([type=checkbox]), select { display: block; width: 100%; margin-top: .3rem; padding: .6rem; border: 1px solid #414550; border-radius: .4rem; background: #101114; color: inherit; }
 button { cursor: pointer; border: 1px solid #424654; border-radius: .4rem; padding: .45rem .8rem; background: #292c33; color: inherit; font: inherit; }
 button.primary { background: #548cff; color: #101114; border-color: #548cff; font-weight: 650; }
 button.danger { color: #ffa2a0; }
@@ -24,3 +24,5 @@ fieldset { margin: 0 0 1rem; border-color: #424654; }
 .table-wrap { margin-top: 1rem; overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; background: #1b1d22; }
 th, td { text-align: left; padding: .75rem; border-bottom: 1px solid #292c33; }
+details { margin-top: 1rem; }
+summary { cursor: pointer; color: #b6cdff; margin-bottom: .65rem; }

@@ -3,7 +3,7 @@ from contextlib import contextmanager
 import httpx
 import pytest
 
-from client.api import API, ServerRejected, ServerUnavailable, normalize_server
+from client.api import API, LauncherConfig, ServerRejected, ServerUnavailable, normalize_server
 from client.automation import active_game
 from client.launchers import LAUNCHERS, adapters
 from client.launchers.base import Game, Launcher, Observation, Progress, Result, UnsafeDesktop
@@ -143,7 +143,7 @@ class ExampleAPI:
             raise ServerRejected(401)
 
     def configured(self):
-        return {"steam"}
+        return LauncherConfig(frozenset({"steam"}))
 
     def report(self, key, status, updated, current):
         self.statuses.append((key, status))
@@ -264,3 +264,49 @@ def test_launcher_scan_finds_registry_icon_and_running_executable(tmp_path, monk
     assert [(key, launcher.exe, status) for key, launcher, status in result] == [
         ("steam", steam, "installed"), ("epic", epic, "installed"),
     ]
+
+
+def test_launched_clients_run_in_order_and_local_profile_requests_no_password():
+    steps = []
+
+    class Steam(ExampleLauncher):
+        def launch(self):
+            steps.append("steam_open")
+
+        def wait_for_completion(self, tick, emit):
+            steps.append("steam_complete")
+            return Result("current", current=1)
+
+    class LocalEpic(ExampleLauncher):
+        key = "epic"
+        auth = "external_login"
+
+        def launch(self):
+            steps.append("epic_open")
+
+    class LocalAPI(ExampleAPI):
+        def configured(self):
+            return LauncherConfig(local_sessions={"steam": "official", "epic": "steam"})
+
+    notices, api = [], LocalAPI()
+    runner = Updater({"maintenance": True}, api, notices.append, {"steam": Steam, "epic": LocalEpic})
+    runner.delay = lambda seconds: None
+    runner.run()
+
+    assert steps == ["steam_open", "steam_complete", "epic_open"]
+    assert not api.calls
+    assert [notice.result.reason for notice in notices if notice.result and notice.launcher == "epic"] == [
+        "epic_steam_session",
+    ]
+
+
+def test_launcher_config_supports_existing_server_and_rejects_overlapping_password_mode():
+    def config(payload):
+        transport = httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
+        with API("https://server.test", transport=transport) as api:
+            return api.configured()
+
+    assert config({"launchers": ["steam"]}) == LauncherConfig(frozenset({"steam"}))
+    assert config({"launchers": ["epic", "steam"], "local_sessions": {"epic": "steam"}}) == LauncherConfig(
+        frozenset({"steam"}), {"epic": "steam"},
+    )

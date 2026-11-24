@@ -31,7 +31,8 @@ ACTIONS = {
     "device_registered": "Компьютер подключён", "device_revoked": "Доступ отозван",
     "device_token_rotated": "Токен устройства заменён",
     "enrollment_created": "Создан ключ подключения", "account_save": "Аккаунт сохранён",
-    "account_delete": "Аккаунт удалён", "authorization_requested": "Запрошен вход",
+    "account_delete": "Аккаунт удалён", "account_local": "Выбрана сессия на компьютере",
+    "authorization_requested": "Запрошен вход",
     "started": "Начало проверки", "updated": "Установка завершена", "current": "Игры актуальны",
     "error": "Ошибка", "login_required": "Требуется вход",
     "confirmation_required": "Требуется подтверждение", "busy": "Аккаунт занят",
@@ -163,7 +164,11 @@ def create_app(database_path=None, key_path=None):
             row = device(connection, authorization)
             permitted = set(json.loads(row["allowed"]))
             configured = {account["launcher"] for account in connection.execute("SELECT launcher FROM accounts")}
-        return {"launchers": [launcher for launcher in Launcher if launcher in permitted & configured]}
+            local = {item["launcher"]: item["provider"] for item in connection.execute(
+                "SELECT launcher,provider FROM local_sessions"
+            ) if item["launcher"] in permitted}
+        return {"launchers": [launcher for launcher in Launcher if launcher in permitted & configured],
+                "local_sessions": local}
 
     @app.post("/api/v1/auth/lease")
     def acquire(body: LeaseRequest, request: Request, authorization: str | None = Header(None)):
@@ -246,7 +251,9 @@ def create_app(database_path=None, key_path=None):
 
     def panel(connection, request, section, session, enrollment=None):
         accounts, devices, events = {}, [], []
+        local_sessions = {}
         if section == "accounts":
+            local_sessions = {row["launcher"]: row for row in connection.execute("SELECT * FROM local_sessions")}
             for row in connection.execute("SELECT * FROM accounts"):
                 accounts[row["launcher"]] = {
                     "changed": row["changed"],
@@ -259,7 +266,8 @@ def create_app(database_path=None, key_path=None):
         elif section == "journal":
             events = connection.execute("SELECT * FROM events ORDER BY id DESC LIMIT 200").fetchall()
         return render(request, "panel.html", section=section, csrf=session["csrf"], names=LAUNCHER_NAMES,
-                      accounts=accounts, devices=devices, events=events, enrollment=enrollment, actions=ACTIONS)
+                      accounts=accounts, local_sessions=local_sessions, devices=devices, events=events,
+                      enrollment=enrollment, actions=ACTIONS)
 
     @app.get("/")
     def index():
@@ -330,13 +338,30 @@ def create_app(database_path=None, key_path=None):
     @app.post("/admin/accounts/{launcher}")
     def account(launcher: Launcher, request: Request, form_token: str = Form(max_length=100),
                 action: str = Form(max_length=10), username: str = Form("", max_length=320),
-                password: str = Form("", max_length=1024)):
+                password: str = Form("", max_length=1024), label: str = Form("", max_length=80),
+                provider: str = Form("official", max_length=10), remove_password: bool = Form(False)):
         now = guard(request, "panel", 120)
         with database.transaction(write=True) as connection:
             session = admin(connection, request, now)
             csrf(session["csrf"], form_token)
             if action == "delete":
                 connection.execute("DELETE FROM accounts WHERE launcher=?", (launcher,))
+                connection.execute("DELETE FROM local_sessions WHERE launcher=?", (launcher,))
+            elif action == "local" and label.strip() and (
+                provider == "official" or (launcher == Launcher.EPIC and provider == "steam")
+            ):
+                has_password = connection.execute(
+                    "SELECT 1 FROM accounts WHERE launcher=?", (launcher,),
+                ).fetchone()
+                if has_password and not remove_password:
+                    raise HTTPException(409, "Confirm removal of the stored credentials")
+                connection.execute("DELETE FROM accounts WHERE launcher=?", (launcher,))
+                connection.execute(
+                    """
+                    INSERT INTO local_sessions VALUES (?,?,?,?) ON CONFLICT(launcher) DO UPDATE SET
+                    label=excluded.label, provider=excluded.provider, changed=excluded.changed
+                    """, (launcher, label.strip(), provider, now),
+                )
             elif action == "save" and username.strip() and password:
                 key_id, nonce, ciphertext = app.state.vault.encrypt(launcher, username.strip(), password)
                 connection.execute(
@@ -347,6 +372,7 @@ def create_app(database_path=None, key_path=None):
                     (launcher, key_id, nonce, ciphertext, now),
                 )
                 connection.execute("DELETE FROM leases WHERE launcher=?", (launcher,))
+                connection.execute("DELETE FROM local_sessions WHERE launcher=?", (launcher,))
             else:
                 raise HTTPException(422, "Invalid account operation")
             event(connection, now, f"account_{action}", launcher=launcher)

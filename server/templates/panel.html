@@ -2,14 +2,39 @@
 {% block content %}
 {% if section == 'accounts' %}
 <h1>Аккаунты</h1>
+<p class="muted">Чтобы использовать сохранённую сессию, укажи ник и войди в официальный клиент на каждом компьютере.</p>
 <div class="cards">
 {% for id, name in names.items() %}
 {% set account = accounts.get(id) %}
+{% set local = local_sessions.get(id) %}
 <section class="card">
   <h2>{{ name }}</h2>
-  {% if account %}
-  <p class="ok">Настроен · {{ account.changed | utc }}</p>
+  {% if local %}
+  <p class="ok">{{ local.label }} · Сессия на компьютере</p>
+  {% elif account %}
+  <p class="ok">Вход по паролю · {{ account.changed | utc }}</p>
   {% else %}<p class="muted">Ожидает настройки</p>{% endif %}
+  <form method="post" action="/admin/accounts/{{ id }}">
+    <input type="hidden" name="form_token" value="{{ csrf }}">
+    <label>Название или ник аккаунта<input name="label" maxlength="80" value="{{ local.label if local else '' }}" required></label>
+    {% if id == 'epic' %}
+    <label>Способ входа на компьютере
+      <select name="provider">
+        <option value="official">Через Epic Games</option>
+        <option value="steam" {% if local and local.provider == 'steam' %}selected{% endif %}>Через Steam, если доступно в Epic Games</option>
+      </select>
+    </label>
+    {% endif %}
+    {% if account %}
+    <label class="choice"><input type="checkbox" name="remove_password" value="true" required> Удалить с сервера сохранённые данные для входа</label>
+    {% endif %}
+    <div class="actions">
+      <button class="primary" name="action" value="local">{{ 'Сохранить сессию' if local else 'Привязать сессию' }}</button>
+      {% if local %}<button class="danger" name="action" value="delete" formnovalidate>Отвязать</button>{% endif %}
+    </div>
+  </form>
+  <details {% if account %}open{% endif %}>
+    <summary>Вход по логину и паролю</summary>
   <form method="post" action="/admin/accounts/{{ id }}">
     <input type="hidden" name="form_token" value="{{ csrf }}">
     <label>Логин или email<input name="username" maxlength="320" autocomplete="off" value="{{ account.username if account else '' }}" required></label>
@@ -21,6 +46,7 @@
       {% endif %}
     </div>
   </form>
+  </details>
 </section>
 {% endfor %}
 </div>

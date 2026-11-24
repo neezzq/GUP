@@ -53,6 +53,8 @@ LABELS = {
     "challenge": ("Подтвердите действие в клиенте", "Confirm in the official client"),
     "steam_guard": ("Подтвердите Steam Guard в Steam или на телефоне", "Confirm Steam Guard in Steam or on your phone"),
     "external_login": ("Выберите провайдера в официальном окне входа", "Choose your provider in the official sign-in window"),
+    "local_session_required": ("Войдите в свой аккаунт в лаунчере", "Sign in to your account in the launcher"),
+    "epic_steam_session": ("Войдите в Epic через Steam, если доступно", "Sign in to Epic with Steam if available"),
     "unknown_session": ("Не подтверждена сессия клиента", "Launcher session could not be verified"),
     "unknown_update": ("Клиент не подтвердил состояние всех игр", "Launcher did not confirm all game states"),
     "previous_active": ("Предыдущая очередь может работать", "Previous queue may still be active"),
@@ -468,7 +470,9 @@ class Window(tk.CTk):
         reason = item.result.reason if item.result else ""
         if item.result:
             self.results[key] = item.result
-        display = reason if reason in {"not_installed", "steam_guard", "external_login"} else status
+        display = reason if reason in {
+            "not_installed", "steam_guard", "external_login", "local_session_required", "epic_steam_session",
+        } else status
         label = self.label(display)
         if item.pending is not None:
             label += f" · {item.pending}"

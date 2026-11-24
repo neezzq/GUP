@@ -14,6 +14,10 @@ CREATE TABLE IF NOT EXISTS accounts (
     launcher TEXT PRIMARY KEY, key_id TEXT NOT NULL, nonce BLOB NOT NULL,
     ciphertext BLOB NOT NULL, changed INTEGER NOT NULL, UNIQUE(key_id, nonce)
 );
+CREATE TABLE IF NOT EXISTS local_sessions (
+    launcher TEXT PRIMARY KEY, label TEXT NOT NULL,
+    provider TEXT NOT NULL CHECK (provider IN ('official', 'steam')), changed INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS devices (
     id TEXT PRIMARY KEY, name TEXT NOT NULL, token TEXT NOT NULL UNIQUE,
     allowed TEXT NOT NULL, created INTEGER NOT NULL, seen INTEGER NOT NULL,

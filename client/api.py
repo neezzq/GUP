@@ -1,11 +1,12 @@
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 import re
 import time
 
 import httpx
 
 
-VERSION = "0.1.2"
+VERSION = "0.1.3"
 PREFIX = "/api/v1/"
 TOKEN = re.compile(r"[A-Za-z0-9_-]{43}")
 
@@ -18,6 +19,12 @@ class ServerRejected(Exception):
     def __init__(self, status):
         self.status = status
         super().__init__(f"HTTP {status}")
+
+
+@dataclass(frozen=True)
+class LauncherConfig:
+    passwords: frozenset[str] = frozenset()
+    local_sessions: dict[str, str] = field(default_factory=dict)
 
 
 def normalize_server(value):
@@ -80,10 +87,14 @@ class API:
         return self.request("POST", "devices/heartbeat", {"version": VERSION})
 
     def configured(self):
-        result = self.request("GET", "launchers/config").get("launchers")
-        if not isinstance(result, list) or not all(isinstance(item, str) for item in result):
+        result = self.request("GET", "launchers/config")
+        passwords = result.get("launchers")
+        local = result.get("local_sessions", {})
+        if not isinstance(passwords, list) or not all(isinstance(item, str) for item in passwords):
             raise ServerRejected(502)
-        return set(result)
+        if not isinstance(local, dict) or any(provider not in ("official", "steam") for provider in local.values()):
+            raise ServerRejected(502)
+        return LauncherConfig(frozenset(passwords).difference(local), local)
 
     def report(self, launcher, status, updated=0, current=0):
         self.request("POST", "updates/report", {
