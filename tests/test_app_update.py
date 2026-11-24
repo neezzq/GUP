@@ -62,8 +62,8 @@ def test_download_rejects_untrusted_redirect(tmp_path):
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Runs the real Windows replacement helper")
-@pytest.mark.parametrize("valid", [True, False])
-def test_windows_replacement_restarts_with_correct_exe(tmp_path, valid):
+@pytest.mark.parametrize("scenario", ["success", "wrong_hash", "failed_start"])
+def test_windows_replacement_restarts_with_correct_exe(tmp_path, scenario):
     csc = Path(os.environ["SystemRoot"]) / "Microsoft.NET/Framework64/v4.0.30319/csc.exe"
     if not csc.is_file():
         pytest.skip("Windows .NET Framework compiler unavailable")
@@ -73,17 +73,19 @@ def test_windows_replacement_restarts_with_correct_exe(tmp_path, valid):
     payload = stage / "payload.exe"
     for path, text in ((target, "previous"), (payload, "updated")):
         source = stage / "probe.cs"
+        exit_code = int(text == "updated" and scenario == "failed_start")
         source.write_text(
-            'class Probe { static void Main() { System.IO.File.WriteAllText('
+            'class Probe { static int Main() { System.IO.File.WriteAllText('
             'System.IO.Path.Combine(System.AppDomain.CurrentDomain.BaseDirectory, "restarted.txt"),'
-            f'"{text}"); }} }}',
+            f'"{text}"); return {exit_code}; }} }}',
             encoding="ascii",
         )
         subprocess.run([str(csc), "/nologo", f"/out:{path}", str(source)], check=True)
-    expected = hashlib.sha256((payload if valid else target).read_bytes()).hexdigest()
+    success = scenario == "success"
+    expected = hashlib.sha256((payload if success else target).read_bytes()).hexdigest()
     actual = hashlib.sha256(payload.read_bytes()).hexdigest()
     process = start_replacement(
-        target, stage, actual if valid else "0" * 64, tmp_path, parent_pid=2147483647,
+        target, stage, "0" * 64 if scenario == "wrong_hash" else actual, tmp_path, parent_pid=2147483647,
     )
     assert process.wait(timeout=45) == 0
     assert hashlib.sha256(target.read_bytes()).hexdigest() == expected
@@ -92,5 +94,5 @@ def test_windows_replacement_restarts_with_correct_exe(tmp_path, valid):
         if marker.is_file() and marker.stat().st_size:
             break
         time.sleep(.05)
-    assert marker.read_text() == ("updated" if valid else "previous")
-    assert (tmp_path / ERROR_FILE).exists() is not valid
+    assert marker.read_text() == ("updated" if success else "previous")
+    assert (tmp_path / ERROR_FILE).exists() is not success

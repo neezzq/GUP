@@ -156,7 +156,6 @@ function Start-Application {
     }
 }
 
-$replaced = $false
 $keepBackup = $false
 try {
     $current = Get-Process -Id ([int]$env:GUP_UPDATE_PID) -ErrorAction SilentlyContinue
@@ -169,19 +168,22 @@ try {
     for ($attempt = 0; $attempt -lt 40; $attempt++) {
         try {
             [IO.File]::Replace($payload, $target, $backup)
-            $replaced = $true
             break
         } catch [IO.IOException] {
-            if ($attempt -eq 39) { throw }
+            if ($attempt -eq 39 -or [IO.File]::Exists($backup)) { throw }
             Start-Sleep -Milliseconds 250
         }
     }
     Start-Application
 } catch {
     try { [IO.File]::WriteAllText($errorFile, 'replace_failed') } catch {}
-    if ($replaced -and [IO.File]::Exists($backup)) {
+    if ([IO.File]::Exists($backup)) {
         $keepBackup = $true
-        [IO.File]::Replace($backup, $target, $failed)
+        if ([IO.File]::Exists($target)) {
+            [IO.File]::Replace($backup, $target, $failed)
+        } else {
+            [IO.File]::Move($backup, $target)
+        }
         $keepBackup = $false
     }
     if ([IO.File]::Exists($target)) { Start-Application }
